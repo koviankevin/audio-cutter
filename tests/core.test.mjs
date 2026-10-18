@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalize, subtract, subtractMany, intersect, deletedRanges, totalFrames, frameAtOffset, parseTime, formatTime, History } from '../core.mjs';
+import { normalize, subtract, subtractMany, intersect, junctionPreview, deletedRanges, totalFrames, frameAtOffset, parseTime, formatTime, History } from '../core.mjs';
 import { floatToInt16, interleavePCM, wavHeader } from '../pcm.mjs';
 
 test('trimming head/tail and deleting a middle section keep chronological intervals', () => {
@@ -34,6 +34,26 @@ test('bulk deletion merges unordered overlapping and duplicate ranges without do
   assert.deepEqual(subtractMany(original, [[0,100]]), []);
   assert.deepEqual(subtractMany(original, []), original);
   assert.deepEqual(subtractMany([], [[0,100]]), []);
+});
+
+test('junction preview takes retained context across every pending and committed cut', () => {
+  const source = [[0,100]], removals = [[20,40],[45,50],[55,80]];
+  const kept = subtractMany(source, removals), original = structuredClone(kept);
+  assert.deepEqual(junctionPreview(kept,[20,40],15), {
+    parts:[[5,20],[40,45],[50,55],[80,85]], beforeFrames:15, afterFrames:15,
+  });
+  assert.deepEqual(junctionPreview(kept,[55,80],15), {
+    parts:[[15,20],[40,45],[50,55],[80,95]], beforeFrames:15, afterFrames:15,
+  });
+  assert.deepEqual(kept,original,'preview does not mutate the export timeline');
+  assert.equal(totalFrames(junctionPreview(kept,[20,40],15).parts),30);
+});
+
+test('junction preview handles short context, head, tail and complete deletion', () => {
+  assert.deepEqual(junctionPreview([[40,100]],[0,40],15), {parts:[[40,55]],beforeFrames:0,afterFrames:15});
+  assert.deepEqual(junctionPreview([[0,20]],[20,100],15), {parts:[[5,20]],beforeFrames:15,afterFrames:0});
+  assert.deepEqual(junctionPreview([[0,5],[95,100]],[5,95],15), {parts:[[0,5],[95,100]],beforeFrames:5,afterFrames:5});
+  assert.deepEqual(junctionPreview([],[0,100],15), {parts:[],beforeFrames:0,afterFrames:0});
 });
 
 test('bulk deletion is one undoable operation including sample boundaries', () => {

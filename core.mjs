@@ -52,6 +52,25 @@ export function subtractMany(ranges, removals) {
   return normalize(removals, length).reduce((kept, removal) => subtract(kept, removal), ranges.map(range => [...range]));
 }
 
+// Take context from the final retained timeline, including any other cuts in it.
+export function junctionPreview(ranges, [start, end], contextFrames) {
+  const before = [], after = [];
+  let remaining = contextFrames;
+  const leading = intersect(ranges, [0, start]);
+  for (let i = leading.length - 1; i >= 0 && remaining > 0; i--) {
+    const [a, b] = leading[i], count = Math.min(b - a, remaining);
+    before.unshift([b - count, b]); remaining -= count;
+  }
+  remaining = contextFrames;
+  for (const [a, b] of ranges) {
+    const first = Math.max(a, end);
+    if (b <= first || remaining <= 0) continue;
+    const count = Math.min(b - first, remaining);
+    after.push([first, first + count]); remaining -= count;
+  }
+  return { parts:[...before, ...after], beforeFrames:totalFrames(before), afterFrames:totalFrames(after) };
+}
+
 export function frameAtOffset(ranges, offset) {
   for (const [a, b] of ranges) {
     if (offset < b - a) return a + Math.max(0, offset);

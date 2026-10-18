@@ -41,6 +41,14 @@ async function exportFile(format) {
 async function queuedTimes(index = 0) {
   return (await page.locator('#pending-list .pending-time').nth(index).textContent()).split(' — ').map(time => Math.round(parseTime(time) * 1000) / 1000);
 }
+async function previewSchedule(trigger = () => page.keyboard.press('p')) {
+  await page.evaluate(() => { window.previewSources = []; });
+  await trigger();
+  await waitFor(async () => (await page.evaluate(() => window.previewSources.length)) > 0,'junction did not schedule audio');
+  return page.evaluate(() => window.previewSources.map(({when,offset,duration,buffer}) => ({
+    offset, duration, at:Math.round((when-window.previewSources[0].when)*44100)/44100, channels:buffer.numberOfChannels,
+  })));
+}
 async function holdArrow(key, count, { shift = false, during = async () => {} } = {}) {
   if (shift) await page.keyboard.down('Shift');
   for (let i = 0; i < count; i++) await page.keyboard.down(key);
@@ -132,6 +140,84 @@ try {
   assert.equal(await page.locator('#segment-count').textContent(),'1','queued selections must not delete audio yet');
   assert.equal(await page.locator('#undo').isEnabled(),true,'queue edits join the same history');
   assert.match(await page.locator('#pending-summary').textContent(),/00:04.000.*00:08.000/);
+  // Observe actual Web Audio scheduling, without replacing playback behavior.
+  await page.evaluate(() => {
+    window.previewSources = []; window.previewStopCount = 0;
+    window.previewNativeStart = AudioBufferSourceNode.prototype.start;
+    window.previewNativeStop = AudioBufferSourceNode.prototype.stop;
+    AudioBufferSourceNode.prototype.start = function(when,offset,duration) {
+      window.previewSources.push({when,offset,duration,buffer:this.buffer});
+      return window.previewNativeStart.call(this,when,offset,duration);
+    };
+    AudioBufferSourceNode.prototype.stop = function(...args) {
+      window.previewStopCount++; return window.previewNativeStop.apply(this,args);
+    };
+  });
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('2');
+  const seam = await previewSchedule();
+  assert.deepEqual(seam,[{offset:.5,duration:1.5,at:0,channels:2},{offset:4,duration:1.5,at:1.5,channels:2}],'P joins retained context without playing the deletion');
+  assert.match(await page.locator('#junction-preview-status').textContent(),/待刪 01.*前 1.500 秒.*後 1.500 秒/);
+  assert.equal(await page.locator('#selection-start').inputValue(),'00:02.000');
+  assert.equal(await page.locator('[data-pending-mode="start"]').getAttribute('aria-pressed'),'true','preview preserves selection and mode');
+  const seamError = await page.evaluate(async () => {
+    const records = [...window.previewSources], offline = new OfflineAudioContext(2,3*44100,44100);
+    for (const record of records) {
+      const node = offline.createBufferSource(); node.buffer = record.buffer; node.connect(offline.destination);
+      node.start(record.when-records[0].when,record.offset,record.duration);
+    }
+    const rendered = await offline.startRendering(); let maxError = 0;
+    for (let channel = 0; channel < 2; channel++) {
+      const original = records[0].buffer.getChannelData(channel), result = rendered.getChannelData(channel);
+      for (let i = 0; i < result.length; i++) {
+        const source = i < 1.5*44100 ? .5*44100+i : 4*44100+i-1.5*44100;
+        maxError = Math.max(maxError,Math.abs(result[i]-original[source]));
+      }
+    }
+    return maxError;
+  });
+  assert.ok(seamError < .00001,'scheduled preview preserves exact stereo samples across the join');
+  await waitFor(async()=>await page.locator('#junction-preview-status').isHidden(),'short seam preview must stop automatically');
+  const stopsBefore = await page.evaluate(()=>window.previewStopCount);
+  await previewSchedule(); await previewSchedule();
+  assert.ok(await page.evaluate(()=>window.previewStopCount) >= stopsBefore+2,'P restarts without layering old sources');
+  await page.keyboard.press('Escape'); assert.equal(await page.locator('#junction-preview-status').isHidden(),true);
+  await page.keyboard.press('ArrowRight'); await page.keyboard.press('Control+z');
+  assert.equal(await page.locator('#redo').isEnabled(),true);
+  await previewSchedule(); await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#redo').isEnabled(),true,'preview does not consume or branch history');
+  await page.keyboard.press('Control+y'); assert.deepEqual(await queuedTimes(),[2.01,4]);
+  await page.keyboard.press('Control+z'); await page.keyboard.press('ArrowDown');
+  assert.deepEqual((await previewSchedule()).map(({offset,duration})=>[offset,duration]),[[4.5,1.5],[8,1.5]],'P follows the currently selected marker');
+  await page.keyboard.press('ArrowUp'); assert.equal(await page.locator('#junction-preview-status').isHidden(),true,'switching markers stops the old preview');
+  await page.keyboard.press('1'); await page.keyboard.down('ArrowRight');
+  const nudgedSeam = await previewSchedule(); await page.keyboard.up('ArrowRight');
+  near(nudgedSeam[0].offset,.51,'P first completes a held nudge'); near(nudgedSeam[1].offset,4.01,'preview uses the new end');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Control+z'); assert.deepEqual(await queuedTimes(),[2,4]);
+  await select(4.5,5); await page.locator('#add-deletion').click(); await page.keyboard.press('ArrowUp');
+  assert.deepEqual((await previewSchedule()).map(({offset,duration})=>[offset,duration]),[[.5,1.5],[4,.5],[5,1]],'context skips other queued deletions');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Control+z');
+  await select(0,2); await page.locator('#add-deletion').click(); await page.keyboard.press('ArrowDown');
+  assert.deepEqual((await previewSchedule()).map(({offset,duration})=>[offset,duration]),[[4,1.5]],'a leading cut previews only the retained side');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Control+z');
+  await select(0,12); await page.locator('#add-deletion').click(); await page.keyboard.press('ArrowDown');
+  assert.equal(await page.locator('#preview-junction').isDisabled(),true);
+  await page.evaluate(()=>{window.previewSources=[];}); await page.keyboard.press('p');
+  assert.equal(await page.evaluate(()=>window.previewSources.length),0,'complete deletion schedules no playback');
+  assert.match(await page.locator('#notice').textContent(),/沒有保留音訊/);
+  await page.keyboard.press('Control+z'); await page.keyboard.press('ArrowDown');
+  await page.locator('#export-name').focus(); await page.keyboard.press('p');
+  assert.equal(await page.evaluate(()=>window.previewSources.length),0,'P remains text input inside a filename');
+  await page.locator('#waveform').focus(); await page.locator('#waveform').dispatchEvent('keydown',{key:'p',isComposing:true});
+  assert.equal(await page.evaluate(()=>window.previewSources.length),0,'IME composition cannot start a preview');
+  await previewSchedule(()=>page.locator('#preview-junction').click());
+  await page.screenshot({path:path.join(output,'08-junction-preview.png'),fullPage:true});
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => {
+    AudioBufferSourceNode.prototype.start = window.previewNativeStart;
+    AudioBufferSourceNode.prototype.stop = window.previewNativeStop;
+    window.previewSources = [];
+  });
+  await select(6,8);
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.locator('#selection-start').inputValue(),'00:02.000','Down wraps from the last marker to the first');
   assert.equal(await page.locator('#waveform').evaluate(element => element === document.activeElement),true,'navigation focuses the waveform');
@@ -563,7 +649,7 @@ try {
   const appRequests = requests.filter(request=>!environmentRequests.includes(request));
   await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
   assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
-  console.log(`PASS ${channel || 'chromium'}: marker/mode shortcuts, wrap/entry/zoom/focus, input+IME guards, held-nudge switches and history, keyboard move/start/end + Shift, WAV samples, MP3 stereo, responsive layout, local-only network.`);
+  console.log(`PASS ${channel || 'chromium'}: junction preview scheduling/stereo/auto-stop/restart/history/edges, marker and mode shortcuts, held nudges, WAV samples, MP3 stereo, responsive layout, local-only network.`);
 } finally {
   await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
 }

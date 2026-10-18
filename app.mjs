@@ -1,4 +1,4 @@
-import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, formatTime, parseTime } from './core.mjs';
+import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, junctionPreview, formatTime, parseTime } from './core.mjs';
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 
@@ -10,6 +10,7 @@ let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, anim
 let pendingDeletions = [];
 let keptRanges = [];
 let pendingEdit = null;
+let junctionPlayback = null;
 const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true), editPendingRange);
 const ranges = () => keptRanges;
 const outputRanges = () => subtractMany(ranges(), pendingDeletions);
@@ -59,6 +60,7 @@ function updateButtons() {
   $('add-deletion').disabled = !validSelection || !totalFrames(intersect(ranges(), selection));
   $('apply-deletions').disabled = !loaded || !pendingDeletions.length;
   $('preview-deletions').disabled = !hasOutput || !pendingDeletions.length;
+  $('preview-junction').disabled = !hasOutput || selectedPendingIndex() < 0;
   $('export-button').disabled = !hasAudio || !!exportJob || !hasOutput;
   $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔'}`;
   $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : signature(ranges()) === signature([[0, engine.buffer?.length]]) ? '原始音檔' : '已匯出';
@@ -100,6 +102,7 @@ function activatePending(index, mode = wave.pendingMode) {
 }
 function setSelection(value) {
   if (!engine.buffer) return;
+  if (junctionPlayback) pause();
   if ($('selection-start').getAttribute('aria-invalid')) clearNotice();
   selection = value.map(frame => Math.round(Math.max(0, Math.min(engine.buffer.length, frame))));
   updateSelectionFields();
@@ -207,22 +210,36 @@ function applyPendingDeletions() {
   notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
 function pause() {
-  playingRequest++; cursor = engine.pause(); cancelAnimationFrame(animation); updatePlaybackUI();
+  playingRequest++; cursor = engine.pause(); junctionPlayback = null; cancelAnimationFrame(animation); updatePlaybackUI();
 }
 function updatePlaybackUI() {
   $('toggle-play').setAttribute('aria-label', engine.playing ? '暫停' : '播放');
   $('toggle-play').querySelector('use').setAttribute('href', engine.playing ? '#i-pause' : '#i-play');
   $('playhead-time').textContent = formatTime(seconds(cursor));
+  $('junction-preview-status').hidden = !junctionPlayback;
+  if (junctionPlayback && $('junction-preview-status').textContent !== junctionPlayback) $('junction-preview-status').textContent = junctionPlayback;
   wave.update(ranges(), selection, cursor, pendingDeletions);
 }
-async function startPlayback(parts = outputRanges(), from = cursor) {
+async function startPlayback(parts = outputRanges(), from = cursor, junction = null) {
   if (!engine.buffer || !parts.length) return;
   pause(); const request = ++playingRequest;
+  junctionPlayback = junction; updatePlaybackUI();
   try {
     await engine.play(parts, from);
     if (request !== playingRequest) { if (!engine.playing) engine.pause(); return; }
     tick();
-  } catch { notify('無法播放音檔，請確認瀏覽器允許播放音訊。', true); }
+  } catch { if (request === playingRequest) { pause(); notify('無法播放音檔，請確認瀏覽器允許播放音訊。', true); } }
+}
+function previewCurrentJunction() {
+  if (!engine.buffer || wave.drag) return;
+  wave.finishKeyboardEdit();
+  const index = selectedPendingIndex();
+  if (index < 0) { notify('請先用 ↑／↓ 選取待刪段落，再按 P 預聽接點。'); return; }
+  const preview = junctionPreview(outputRanges(), pendingDeletions[index], Math.round(engine.buffer.sampleRate * 1.5));
+  if (!preview.parts.length) { pause(); notify('刪除後沒有保留音訊，無法預聽接點。'); return; }
+  const context = !preview.beforeFrames ? '位於結果開頭，僅預聽保留的後段' : !preview.afterFrames ? '位於結果結尾，僅預聽保留的前段' : '接點前 → 接點後';
+  const status = `預聽待刪 ${String(index + 1).padStart(2, '0')} 接點 · ${context}（前 ${seconds(preview.beforeFrames).toFixed(3)} 秒／後 ${seconds(preview.afterFrames).toFixed(3)} 秒）· P 重聽，Esc 停止`;
+  clearNotice(); startPlayback(preview.parts, preview.parts[0][0], status);
 }
 function tick() {
   cursor = engine.currentFrame();
@@ -401,6 +418,7 @@ document.querySelectorAll('[data-pending-mode]').forEach(button => button.addEve
   activatePending(selectedPendingIndex(), button.dataset.pendingMode);
 }));
 $('preview-deletions').addEventListener('click', () => startPlayback(outputRanges(), 0));
+$('preview-junction').addEventListener('click', () => { previewCurrentJunction(); $('waveform').focus({ preventScroll:true }); });
 $('keep-selection').addEventListener('click', () => edit('keep'));
 $('undo').addEventListener('click', () => navigateHistory('undo'));
 $('redo').addEventListener('click', () => navigateHistory('redo'));
@@ -419,6 +437,9 @@ $('export-button').addEventListener('click', exportAudio);
 $('cancel-export').addEventListener('click', () => cancelExport());
 document.addEventListener('keydown', event => {
   if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select')) return;
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p' && !wave.drag) {
+    event.preventDefault(); if (!event.repeat) previewCurrentJunction(); return;
+  }
   const pendingShortcut = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ['ArrowUp','ArrowDown','1','2','3'].includes(event.key);
   if (pendingShortcut && pendingDeletions.length && !wave.drag) {
     event.preventDefault();
@@ -432,6 +453,7 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (pendingEdit) { if (event.key === 'Escape') { event.preventDefault(); wave.cancelDrag(); } return; }
+  if (event.key === 'Escape' && junctionPlayback) { event.preventDefault(); pause(); return; }
   const modified = event.ctrlKey || event.metaKey;
   if (modified && event.key.toLowerCase() === 'z') { event.preventDefault(); (event.shiftKey ? $('redo') : $('undo')).click(); }
   else if (modified && event.key.toLowerCase() === 'y') { event.preventDefault(); $('redo').click(); }
