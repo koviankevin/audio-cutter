@@ -62,7 +62,7 @@
           <section class="card editor">
             <div class="file-header"><div class="file-info"><span class="file-icon"><svg><use href="#i-music"/></svg></span><div><h2 id="file-name"></h2><p id="file-meta"></p></div></div><button id="replace-file" class="button small subtle">更換音檔</button></div>
             <div class="editor-toolbar"><span class="section-label">音訊波形 <span id="edit-indicator" class="edit-indicator">原始音檔</span></span><div class="history-tools"><button id="undo" class="icon-button" aria-label="復原" title="復原 Ctrl+Z"><svg><use href="#i-undo"/></svg></button><button id="redo" class="icon-button" aria-label="重做" title="重做 Ctrl+Shift+Z"><svg><use href="#i-redo"/></svg></button><span></span><button id="reset" class="text-button" title="還原所有剪輯"><svg><use href="#i-reset"/></svg>還原</button></div></div>
-            <div class="wave-wrap"><canvas id="waveform" tabindex="0" aria-label="音訊波形，可拖曳選取區間；也可使用下方時間欄位選段。左右方向鍵移動播放位置。"></canvas></div>
+            <div class="wave-wrap"><canvas id="waveform" tabindex="0" aria-label="音訊波形，可拖曳選取區間；選取待刪段落後，左右方向鍵微調，Shift 加大幅度。未選取待刪段落時，左右方向鍵移動播放位置。" aria-describedby="pending-keyboard-hint"></canvas></div>
             <div class="wave-navigation"><span class="wave-legend"><i class="kept-dot"></i>保留 <i class="removed-dot"></i>已刪除 <span id="pending-legend" hidden><i class="pending-dot"></i>待刪除</span></span><label class="zoom-label">縮放 <input id="zoom" type="range" min="1" max="64" step="1" value="1" aria-label="波形縮放"><output id="zoom-value">1×</output></label></div>
             <label id="scroll-label" class="scroll-label" hidden><span>波形位置</span><input id="wave-scroll" type="range" min="0" max="1000" value="0" aria-label="波形水平位置"></label>
             <div class="transport"><div class="transport-primary"><button id="toggle-play" class="play-button" aria-label="播放或暫停"><svg><use href="#i-play"/></svg></button><div class="time-display"><strong id="playhead-time">00:00.000</strong><span>/ <span id="original-duration">00:00.000</span></span></div></div><button id="preview-result" class="button subtle small"><svg><use href="#i-play"/></svg>預聽剪輯結果</button></div>
@@ -71,9 +71,11 @@
           <section id="pending-panel" class="card pending-card" aria-label="待刪除段落" hidden>
             <div class="segments-heading"><h2>待刪除段落 <span id="pending-count">0</span></h2><button id="clear-deletions" class="text-button">清空清單</button></div>
             <p id="pending-summary" class="pending-summary" role="status"></p>
+            <div class="pending-keyboard-tools" role="group" aria-label="待刪段落鍵盤調整目標"><span>方向鍵微調</span><button type="button" data-pending-mode="move" aria-pressed="true">整段移動</button><button type="button" data-pending-mode="start" aria-pressed="false">起點</button><button type="button" data-pending-mode="end" aria-pressed="false">終點</button></div>
+            <p id="pending-keyboard-hint" class="pending-keyboard-hint">先點選清單中的段落，或點選橘色段落及把手。</p>
             <ol id="pending-list" class="segment-list pending-list"></ol>
             <div class="pending-actions"><button id="apply-deletions" class="button danger-soft"><svg><use href="#i-scissors"/></svg>一次刪除清單</button><button id="preview-deletions" class="button subtle"><svg><use href="#i-play"/></svg>預聽刪除後</button></div>
-            <p class="multi-select-hint">拖曳橘色段落中間可整段平移，長度不變；拖左右把手可調整起訖點。平移遇到其他段落或已刪除區域會停止，按 Esc 可取消。確認後按「刪除清單並匯出」。</p>
+            <p class="multi-select-hint">拖曳橘色段落中間可整段平移，長度不變；左右把手可調整起訖點。也可點選段落後，切換上方目標，以 ← → 微調；Shift 加大幅度。長按到放開算一步，Ctrl+Z 復原，Esc 取消。平移遇到其他段落或已刪除區域會停止。</p>
           </section>
           <section class="card segments-card"><div class="segments-heading"><h2>保留的片段 <span id="segment-count">1</span></h2><span>依原始順序接起來</span></div><ol id="segment-list" class="segment-list"></ol><p id="empty-segments" class="empty-segments" hidden>目前沒有保留片段，按「復原」即可找回聲音。</p></section>
           <div class="keyboard-hints"><span><kbd>Space</kbd> 播放 / 暫停</span><span><kbd>Delete</kbd> 刪除選段</span><span><kbd>Ctrl</kbd> + <kbd>Z</kbd> 復原</span></div>

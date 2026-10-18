@@ -39,7 +39,14 @@ async function exportFile(format) {
   await download.saveAs(target); return target;
 }
 async function queuedTimes(index = 0) {
-  return (await page.locator('#pending-list .pending-time').nth(index).textContent()).split(' — ').map(parseTime);
+  return (await page.locator('#pending-list .pending-time').nth(index).textContent()).split(' — ').map(time => Math.round(parseTime(time) * 1000) / 1000);
+}
+async function holdArrow(key, count, { shift = false, during = async () => {} } = {}) {
+  if (shift) await page.keyboard.down('Shift');
+  for (let i = 0; i < count; i++) await page.keyboard.down(key);
+  await during();
+  await page.keyboard.up(key);
+  if (shift) await page.keyboard.up('Shift');
 }
 async function dragBoundary(from, to, { zoom = 1, scroll = 0, cancel = '', during = () => {} } = {}) {
   const canvas = page.locator('#waveform'); await canvas.scrollIntoViewIfNeeded();
@@ -125,6 +132,67 @@ try {
   assert.equal(await page.locator('#segment-count').textContent(),'1','queued selections must not delete audio yet');
   assert.equal(await page.locator('#undo').isEnabled(),true,'queue edits join the same history');
   assert.match(await page.locator('#pending-summary').textContent(),/00:04.000.*00:08.000/);
+  await page.getByRole('button',{name:'選取待刪段落 1',exact:true}).click();
+  await page.keyboard.press('ArrowRight');
+  assert.deepEqual(await queuedTimes(),[2.01,4.01],'arrows move a selected marker by exactly 10ms');
+  await page.keyboard.press('Shift+ArrowLeft');
+  assert.deepEqual(await queuedTimes(),[1.91,3.91],'Shift increases the step to 100ms');
+  assert.equal(await page.locator('#selection-duration').textContent(),'2.000 秒');
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+  await page.locator('[data-pending-mode="start"]').click();
+  await page.keyboard.press('ArrowRight'); await page.keyboard.press('Shift+ArrowLeft');
+  assert.deepEqual(await queuedTimes(),[1.91,4],'start mode keeps the end fixed');
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+  await page.locator('[data-pending-mode="end"]').click();
+  await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Shift+ArrowRight');
+  assert.deepEqual(await queuedTimes(),[2,4.09],'end mode keeps the start fixed');
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+  await page.locator('[data-pending-mode="move"]').click();
+  await holdArrow('ArrowRight',3);
+  assert.deepEqual(await queuedTimes(),[2.03,4.03]);
+  await page.keyboard.press('Control+z'); assert.deepEqual(await queuedTimes(),[2,4],'a held key is one undo step');
+  await page.keyboard.press('Control+y'); assert.deepEqual(await queuedTimes(),[2.03,4.03]);
+  await page.keyboard.press('Control+z');
+  await holdArrow('ArrowRight',2,{shift:true,during:async()=>page.keyboard.press('Escape')});
+  assert.deepEqual(await queuedTimes(),[2,4],'Escape cancels keyboard adjustment');
+  assert.equal(await page.locator('#redo').isEnabled(),true,'cancelled keyboard adjustment preserves redo');
+  await page.keyboard.down('ArrowRight'); await page.locator('#export-name').focus(); await page.keyboard.up('ArrowRight');
+  assert.deepEqual(await queuedTimes(),[2.01,4.01],'leaving the waveform commits a held adjustment');
+  await page.keyboard.press('ArrowRight'); assert.deepEqual(await queuedTimes(),[2.01,4.01],'text input arrows do not edit markers');
+  await page.locator('#waveform').focus(); await page.keyboard.press('Control+z');
+  await holdArrow('ArrowRight',30,{shift:true});
+  assert.equal(await page.locator('#pending-count').textContent(),'2','keyboard movement stops before a neighbor');
+  assert.equal(await page.locator('#selection-duration').textContent(),'2.000 秒');
+  near((await queuedTimes())[1],6,'neighbor movement boundary');
+  await page.keyboard.press('Control+z');
+  await holdArrow('ArrowLeft',30,{shift:true}); assert.deepEqual(await queuedTimes(),[0,2]);
+  await page.keyboard.press('ArrowRight'); await page.keyboard.press('Control+z');
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await page.locator('#redo').isEnabled(),true,'a blocked nudge creates no history step');
+  await page.keyboard.press('Control+y'); assert.deepEqual(await queuedTimes(),[.01,2.01]);
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+  await page.locator('[data-pending-mode="start"]').click(); await holdArrow('ArrowRight',30,{shift:true});
+  assert.equal(await page.locator('#selection-duration').textContent(),'0.001 秒','keyboard endpoints cannot cross');
+  await page.keyboard.press('Control+z');
+  await page.locator('[data-pending-mode="end"]').click();
+  await holdArrow('ArrowRight',25,{shift:true,during:async()=>assert.equal(await page.locator('#pending-count').textContent(),'2')});
+  assert.deepEqual(await queuedTimes(),[2,8],'overlapping keyboard resize merges only after release');
+  await page.keyboard.press('Control+z'); assert.equal(await page.locator('#pending-count').textContent(),'2');
+  await page.getByRole('button',{name:'選取待刪段落 2',exact:true}).click();
+  await page.locator('[data-pending-mode="end"]').click(); await holdArrow('ArrowRight',50,{shift:true});
+  assert.deepEqual(await queuedTimes(1),[6,12],'end clamps to file boundary');
+  await page.keyboard.press('Control+z');
+  await dragBoundary(2,2); assert.equal(await page.locator('[data-pending-mode="start"]').getAttribute('aria-pressed'),'true');
+  await page.keyboard.press('ArrowLeft'); assert.deepEqual(await queuedTimes(),[1.99,4],'clicking a handle selects its keyboard mode');
+  await page.keyboard.press('Control+z');
+  await page.getByRole('button',{name:'選取待刪段落 1',exact:true}).click();
+  await page.locator('#zoom').fill('8'); await page.locator('#zoom').dispatchEvent('input');
+  await page.locator('#waveform').focus(); await page.keyboard.press('ArrowRight');
+  assert.deepEqual(await queuedTimes(),[2.01,4.01],'keyboard step does not depend on zoom');
+  await page.keyboard.press('Control+z');
+  await page.locator('#zoom').fill('1'); await page.locator('#zoom').dispatchEvent('input');
+  await page.screenshot({path:path.join(output,'07-keyboard-pending.png'),fullPage:true});
+  await select(6,8);
   await dragBoundary(3,4,{during:async()=>{
     near((await queuedTimes())[0],3,'whole interval moves while dragging');
     near((await queuedTimes())[1],5,'whole interval end moves with its start');
@@ -267,6 +335,10 @@ try {
   assert.deepEqual(await queuedTimes(),[5,6],'movement stops at a deleted region without shortening');
   await dragBoundary(5.5,3);
   assert.deepEqual(await queuedTimes(),[4,5],'movement stays inside the same remaining audio segment');
+  await page.locator('[data-pending-mode="move"]').click(); await holdArrow('ArrowLeft',20,{shift:true});
+  assert.deepEqual(await queuedTimes(),[4,5],'keyboard movement cannot cross a deleted gap');
+  await holdArrow('ArrowRight',20,{shift:true}); assert.deepEqual(await queuedTimes(),[5,6]);
+  await page.keyboard.press('Control+z'); assert.deepEqual(await queuedTimes(),[4,5]);
   await page.locator('#clear-deletions').click();
   assert.equal(await page.locator('#segment-count').textContent(),'3');
   assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
@@ -336,6 +408,21 @@ try {
   assert.ok(peakAt(movedLeft,44100,2.4,440)>.3,'the moved cut leaves the intended source audio');
   assert.ok(peakAt(movedLeft,44100,2.4,880)<.02,'export must use the moved position instead of the old cut');
   assert.ok(peakAt(movedLeft,44100,3.4,880)>.3,'the next retained source interval stays in order');
+  await page.locator('#reset').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
+  await page.getByRole('button',{name:'選取待刪段落 1',exact:true}).click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.locator('[data-pending-mode="end"]').click(); await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+y');
+  const keyboardFile = await exportFile('wav'), keyboardBytes = await readFile(keyboardFile);
+  assert.equal(keyboardBytes.length,44+Math.round(7.99*44100)*4,'WAV uses the keyboard-adjusted length after redo');
+  let keyboardFrame = 0;
+  for (const [a,b] of [[0,2.1],[4.11,6],[8,12]]) {
+    for (let frame = Math.round(a*44100); frame < Math.round(b*44100); frame++,keyboardFrame++) {
+      for (let channel = 0; channel < 2; channel++) assert.ok(Math.abs(original.readInt16LE(44+frame*4+channel*2) - keyboardBytes.readInt16LE(44+keyboardFrame*4+channel*2)) <= 1,'keyboard cuts preserve source samples and stereo order');
+    }
+  }
   await page.locator('#reset').click();
   await select(2,4); await page.locator('#add-deletion').click();
   await select(6,8); await page.locator('#add-deletion').click();
@@ -428,7 +515,7 @@ try {
   const appRequests = requests.filter(request=>!environmentRequests.includes(request));
   await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
   assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
-  console.log(`PASS ${channel || 'chromium'}: unified undo/redo for moves and edges, atomic gestures, cancelled/no-op gestures, branching, merged markers, batch/queue history, moved/resized WAV, MP3 stereo, responsive layout, local-only network.`);
+  console.log(`PASS ${channel || 'chromium'}: keyboard move/start/end + Shift, key-repeat history/cancel/blur, boundary and gap clamps, keyboard WAV samples, pointer editing/history, MP3 stereo, responsive layout, local-only network.`);
 } finally {
   await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
 }

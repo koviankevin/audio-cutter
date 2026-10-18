@@ -14,15 +14,18 @@ export class Waveform {
     canvas.addEventListener('pointercancel', event => { if (event.pointerId === this.drag?.pointerId) this.cancelDrag(); });
     canvas.addEventListener('lostpointercapture', event => { if (event.pointerId === this.drag?.pointerId) this.cancelDrag(); });
     canvas.addEventListener('pointerleave', () => { if (!this.drag) delete canvas.dataset.cursor; });
-    canvas.addEventListener('keydown', event => {
-      if (!this.length || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-      event.preventDefault();
-      this.onSeek(Math.max(0, Math.min(this.length, this.playhead + (event.key === 'ArrowLeft' ? -1 : 1) * this.sampleRate * (event.shiftKey ? 1 : 0.1))));
+    canvas.addEventListener('keydown', event => this.keyDown(event));
+    canvas.addEventListener('keyup', event => {
+      if (!this.keyboardEdit) return;
+      this.keyboardEdit.keys.delete(event.key);
+      if (!this.keyboardEdit.keys.size) this.finishKeyboardEdit();
     });
+    canvas.addEventListener('blur', () => this.finishKeyboardEdit());
+    window.addEventListener('blur', () => this.finishKeyboardEdit());
   }
   setAudio(buffer, peaks) {
     this.length = buffer.length; this.sampleRate = buffer.sampleRate; this.peaks = peaks;
-    this.zoom = 1; this.scroll = 0; this.playhead = 0;
+    this.zoom = 1; this.scroll = 0; this.playhead = 0; this.pendingMode = 'move';
   }
   update(ranges, selection, playhead, pending = []) {
     this.ranges = ranges; this.selection = selection; this.playhead = playhead; this.pending = pending; this.draw();
@@ -66,8 +69,40 @@ export class Waveform {
     return [Math.max(container[0], previous ? previous[1] + 1 : 0),
       Math.min(container[1] - span, next ? next[0] - span - 1 : this.length - span)];
   }
+  keyDown(event) {
+    if (!this.length || !['ArrowLeft', 'ArrowRight'].includes(event.key) || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    if (this.drag) return;
+    const index = this.keyboardEdit?.index ?? (this.pending || []).findIndex(([a, b]) => a === this.selection[0] && b === this.selection[1]);
+    if (index < 0) {
+      this.onSeek(Math.max(0, Math.min(this.length, this.playhead + (event.key === 'ArrowLeft' ? -1 : 1) * this.sampleRate * (event.shiftKey ? 1 : 0.1))));
+      return;
+    }
+    if (!this.keyboardEdit) {
+      this.keyboardEdit = { index, mode:this.pendingMode || 'move', keys:new Set() };
+      this.onEditPending(index, [...this.pending[index]], 'start', this.keyboardEdit.mode);
+    }
+    this.keyboardEdit.keys.add(event.key);
+    const range = [...this.pending[index]], mode = this.keyboardEdit.mode;
+    const delta = (event.key === 'ArrowLeft' ? -1 : 1) * Math.max(1, Math.round(this.sampleRate * (event.shiftKey ? .1 : .01)));
+    if (mode === 'move') {
+      const span = range[1] - range[0], [min, max] = this.moveLimits(index, range);
+      range[0] = Math.max(min, Math.min(max, range[0] + delta)); range[1] = range[0] + span;
+    } else {
+      const gap = Math.min(range[1] - range[0], Math.max(1, Math.round(this.sampleRate / 1000)));
+      if (mode === 'start') range[0] = Math.max(0, Math.min(range[1] - gap, range[0] + delta));
+      else range[1] = Math.min(this.length, Math.max(range[0] + gap, range[1] + delta));
+    }
+    this.onEditPending(index, range, 'update');
+  }
+  finishKeyboardEdit(cancel = false) {
+    if (!this.keyboardEdit) return;
+    const { index } = this.keyboardEdit; this.keyboardEdit = null;
+    this.onEditPending(index, null, cancel ? 'cancel' : 'end');
+  }
   pointerDown(event) {
     if (!this.length || event.button !== 0 || this.drag || event.isPrimary === false) return;
+    this.finishKeyboardEdit();
     event.preventDefault();
     this.canvas.focus({ preventScroll: true });
     const pending = !event.shiftKey && (this.pendingHandleAt(event) || this.pendingBodyAt(event));
@@ -75,7 +110,7 @@ export class Waveform {
       this.drag = { pointerId:event.pointerId, x:event.clientX, frame:this.xToFrame(event.clientX), selection:pending.range, handle:pending.handle, pendingIndex:pending.index, moved:false,
         limits:pending.handle === 'move' ? this.moveLimits(pending.index, pending.range) : null };
       this.canvas.dataset.cursor = pending.handle === 'move' ? 'move' : 'resize'; this.canvas.setPointerCapture(event.pointerId);
-      this.onEditPending(pending.index, pending.range, 'start');
+      this.onEditPending(pending.index, pending.range, 'start', pending.handle);
       return;
     }
     const frame = this.xToFrame(event.clientX);
@@ -132,6 +167,7 @@ export class Waveform {
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
   }
   cancelDrag() {
+    this.finishKeyboardEdit(true);
     const drag = this.drag;
     if (!drag) return;
     this.drag = null; delete this.canvas.dataset.cursor;
