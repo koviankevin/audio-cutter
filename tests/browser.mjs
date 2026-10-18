@@ -49,6 +49,21 @@ async function previewSchedule(trigger = () => page.keyboard.press('p')) {
     offset, duration, at:Math.round((when-window.previewSources[0].when)*44100)/44100, channels:buffer.numberOfChannels,
   })));
 }
+async function loopBufferInfo(parts) {
+  await waitFor(async()=>await page.evaluate(()=>window.previewSources.at(-1)?.loop),'loop source did not start');
+  return page.evaluate(parts => {
+    const record = window.previewSources.at(-1), original = window.previewOriginal;
+    let error = 0, frames = 0;
+    for (const [a,b] of parts) {
+      for (let frame = Math.round(a*44100); frame < Math.round(b*44100); frame++,frames++) {
+        for (let channel = 0; channel < 2; channel++) {
+          error = Math.max(error,Math.abs(record.buffer.getChannelData(channel)[frames] - original.getChannelData(channel)[frame]));
+        }
+      }
+    }
+    return { error, frames:record.buffer.length, expectedFrames:frames, channels:record.buffer.numberOfChannels };
+  },parts);
+}
 async function holdArrow(key, count, { shift = false, during = async () => {} } = {}) {
   if (shift) await page.keyboard.down('Shift');
   for (let i = 0; i < count; i++) await page.keyboard.down(key);
@@ -146,8 +161,8 @@ try {
     window.previewNativeStart = AudioBufferSourceNode.prototype.start;
     window.previewNativeStop = AudioBufferSourceNode.prototype.stop;
     AudioBufferSourceNode.prototype.start = function(when,offset,duration) {
-      window.previewSources.push({when,offset,duration,buffer:this.buffer});
-      return window.previewNativeStart.call(this,when,offset,duration);
+      window.previewSources.push({when,offset,duration,buffer:this.buffer,loop:this.loop});
+      return window.previewNativeStart.apply(this,arguments);
     };
     AudioBufferSourceNode.prototype.stop = function(...args) {
       window.previewStopCount++; return window.previewNativeStop.apply(this,args);
@@ -161,6 +176,7 @@ try {
   assert.equal(await page.locator('[data-pending-mode="start"]').getAttribute('aria-pressed'),'true','preview preserves selection and mode');
   const seamError = await page.evaluate(async () => {
     const records = [...window.previewSources], offline = new OfflineAudioContext(2,3*44100,44100);
+    window.previewOriginal = records[0].buffer;
     for (const record of records) {
       const node = offline.createBufferSource(); node.buffer = record.buffer; node.connect(offline.destination);
       node.start(record.when-records[0].when,record.offset,record.duration);
@@ -212,10 +228,61 @@ try {
   await previewSchedule(()=>page.locator('#preview-junction').click());
   await page.screenshot({path:path.join(output,'08-junction-preview.png'),fullPage:true});
   await page.keyboard.press('Escape');
+  await previewSchedule(()=>page.keyboard.press('l'));
+  assert.deepEqual(await loopBufferInfo([[.5,2],[4,5.5]]),{error:0,frames:132300,expectedFrames:132300,channels:2},'native loop buffer preserves both sides and stereo samples');
+  await page.waitForTimeout(3200);
+  assert.equal(await page.locator('#toggle-play').getAttribute('aria-label'),'暫停','loop continues beyond one preview cycle');
+  assert.equal(await page.evaluate(()=>window.previewSources.length),1,'looping does not accumulate source nodes');
+  await previewSchedule(()=>page.keyboard.press('2'));
+  await previewSchedule(()=>page.keyboard.press('ArrowRight'));
+  assert.deepEqual(await queuedTimes(),[2.01,4]);
+  assert.equal((await loopBufferInfo([[.51,2.01],[4,5.5]])).error,0,'a start nudge automatically rebuilds the loop at the new sample boundaries');
+  await previewSchedule(()=>page.keyboard.press('3'));
+  await previewSchedule(()=>page.keyboard.press('Shift+ArrowRight'));
+  assert.deepEqual(await queuedTimes(),[2.01,4.1]);
+  assert.equal((await loopBufferInfo([[.51,2.01],[4.1,5.6]])).error,0,'Shift end nudge automatically previews the new join');
+  await previewSchedule(()=>page.keyboard.press('2'));
+  await page.evaluate(()=>{window.previewSources=[];});
+  await page.keyboard.down('ArrowRight'); await page.keyboard.down('ArrowRight'); await page.keyboard.down('ArrowRight');
+  assert.equal(await page.evaluate(()=>window.previewSources.length),0,'held nudges pause audition until release');
+  assert.equal(await page.locator('#loop-junction').getAttribute('aria-pressed'),'true','loop session stays active while editing');
+  assert.match(await page.locator('#junction-preview-status').textContent(),/調整中/);
+  await page.keyboard.up('ArrowRight');
+  assert.equal((await loopBufferInfo([[.54,2.04],[4.1,5.6]])).error,0);
+  await previewSchedule(()=>page.keyboard.press('Control+z'));
+  assert.deepEqual(await queuedTimes(),[2.01,4.1],'one undo reverts a held nudge during looping');
+  await previewSchedule(()=>page.keyboard.press('Control+y')); assert.deepEqual(await queuedTimes(),[2.04,4.1]);
+  await previewSchedule(()=>page.keyboard.press('Control+z'));
+  await previewSchedule(()=>page.keyboard.press('ArrowDown'));
+  assert.equal((await loopBufferInfo([[4.5,6],[8,9.5]])).error,0,'navigation continues looping the newly selected marker');
+  await previewSchedule(()=>page.keyboard.press('ArrowUp'));
+  await page.evaluate(()=>{window.previewSources=[];}); await page.keyboard.down('ArrowRight');
+  await page.keyboard.press('Escape'); await page.keyboard.up('ArrowRight');
+  assert.deepEqual(await queuedTimes(),[2.01,4.1],'Escape cancels the held nudge');
+  assert.equal(await page.locator('#loop-junction').getAttribute('aria-pressed'),'false');
+  assert.equal(await page.evaluate(()=>window.previewSources.length),0,'Escape prevents automatic loop restart on key release');
+  await previewSchedule(()=>page.keyboard.press('l')); await page.keyboard.press('l');
+  assert.equal(await page.locator('#junction-preview-status').isHidden(),true,'L also stops looping');
+  await page.keyboard.press('l'); await page.keyboard.press('l'); await previewSchedule(()=>page.keyboard.press('l'));
+  assert.equal(await page.locator('#loop-junction').getAttribute('aria-pressed'),'true','rapid start/stop keeps the latest request active');
+  await previewSchedule();
+  assert.equal(await page.locator('#loop-junction').getAttribute('aria-pressed'),'false','P switches looping to one-shot preview');
+  assert.equal(await page.evaluate(()=>window.previewSources.every(record=>!record.loop)),true);
+  await page.keyboard.press('Escape'); await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+  assert.deepEqual(await queuedTimes(),[2,4]);
+  await page.keyboard.press('1');
+  await previewSchedule(()=>page.locator('#loop-junction').click());
+  await page.screenshot({path:path.join(output,'09-junction-loop.png'),fullPage:true});
+  await page.locator('#loop-junction').click();
+  assert.equal(await page.locator('#loop-junction').getAttribute('aria-pressed'),'false');
+  assert.equal(await page.locator('#redo').isEnabled(),true,'loop playback itself does not branch edit history');
+  await page.evaluate(()=>{window.previewSources=[];}); await page.locator('#export-name').press('l');
+  assert.equal(await page.evaluate(()=>window.previewSources.length),0,'L remains text input in the filename');
+  await page.locator('#waveform').focus();
   await page.evaluate(() => {
     AudioBufferSourceNode.prototype.start = window.previewNativeStart;
     AudioBufferSourceNode.prototype.stop = window.previewNativeStop;
-    window.previewSources = [];
+    window.previewSources = []; window.previewOriginal = null;
   });
   await select(6,8);
   await page.keyboard.press('ArrowDown');
@@ -649,7 +716,7 @@ try {
   const appRequests = requests.filter(request=>!environmentRequests.includes(request));
   await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
   assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
-  console.log(`PASS ${channel || 'chromium'}: junction preview scheduling/stereo/auto-stop/restart/history/edges, marker and mode shortcuts, held nudges, WAV samples, MP3 stereo, responsive layout, local-only network.`);
+  console.log(`PASS ${channel || 'chromium'}: junction loop samples/lifetime, automatic nudge/Shift/history/navigation updates, held-key stop/cancel, one-shot preview, keyboard edits, WAV/MP3 stereo, responsive layout, local-only network.`);
 } finally {
   await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
 }

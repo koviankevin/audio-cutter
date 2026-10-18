@@ -11,6 +11,7 @@ let pendingDeletions = [];
 let keptRanges = [];
 let pendingEdit = null;
 let junctionPlayback = null;
+let junctionLoop = false;
 const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true), editPendingRange);
 const ranges = () => keptRanges;
 const outputRanges = () => subtractMany(ranges(), pendingDeletions);
@@ -35,7 +36,9 @@ function applyState(state) {
 }
 function navigateHistory(direction) {
   if (!engine.buffer || pendingEdit || !(direction === 'undo' ? history.canUndo : history.canRedo)) return;
+  const loop = junctionLoop;
   pause(); applyState(history[direction]()); revokeDownload(); clearNotice(); render();
+  if (loop && selectedPendingIndex() >= 0) previewCurrentJunction({ loop:true });
 }
 
 function notify(message, error = false) {
@@ -61,6 +64,7 @@ function updateButtons() {
   $('apply-deletions').disabled = !loaded || !pendingDeletions.length;
   $('preview-deletions').disabled = !hasOutput || !pendingDeletions.length;
   $('preview-junction').disabled = !hasOutput || selectedPendingIndex() < 0;
+  $('loop-junction').disabled = !junctionLoop && (!hasOutput || selectedPendingIndex() < 0);
   $('export-button').disabled = !hasAudio || !!exportJob || !hasOutput;
   $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔'}`;
   $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : signature(ranges()) === signature([[0, engine.buffer?.length]]) ? '原始音檔' : '已匯出';
@@ -89,6 +93,7 @@ function selectedPendingIndex() {
 function activatePending(index, mode = wave.pendingMode) {
   const range = pendingDeletions[index];
   if (!range) return;
+  const loop = junctionLoop;
   wave.pendingMode = mode; setSelection([...range]);
   const frame = mode === 'start' ? range[0] : mode === 'end' ? range[1] : (range[0] + range[1]) / 2;
   wave.revealFrame(frame); $('wave-scroll').value = String(Math.round(wave.scroll * 1000));
@@ -99,6 +104,7 @@ function activatePending(index, mode = wave.pendingMode) {
     else if (bounds.bottom > viewport.bottom) list.scrollTop += bounds.bottom - viewport.bottom;
   }
   $('waveform').focus({ preventScroll:true });
+  if (loop) previewCurrentJunction({ loop:true });
 }
 function setSelection(value) {
   if (!engine.buffer) return;
@@ -173,7 +179,7 @@ function editPendingRange(index, value, phase, mode) {
   if (phase === 'start') {
     if (!pendingDeletions[index]) return;
     if (mode) wave.pendingMode = mode;
-    pause(); pendingEdit = { index, before:captureState() };
+    pause({ keepJunctionLoop:junctionLoop }); pendingEdit = { index, before:captureState() };
     selection = [...value]; updateSelectionFields();
   } else if (pendingEdit?.index === index) {
     if (phase === 'update') {
@@ -192,6 +198,7 @@ function editPendingRange(index, value, phase, mode) {
       const changed = phase === 'end' && recordEdit(before);
       render();
       if (changed) notify('已更新待刪段落，可按 Ctrl+Z 復原，或繼續調整後匯出。');
+      if (junctionLoop) previewCurrentJunction({ loop:true });
     }
   }
 }
@@ -209,37 +216,47 @@ function applyPendingDeletions() {
   commit(next, { clearPending:true });
   notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
-function pause() {
-  playingRequest++; cursor = engine.pause(); junctionPlayback = null; cancelAnimationFrame(animation); updatePlaybackUI();
+function pause({ keepJunctionLoop = false } = {}) {
+  playingRequest++; cursor = engine.pause(); junctionPlayback = null;
+  if (!keepJunctionLoop) junctionLoop = false;
+  cancelAnimationFrame(animation); updatePlaybackUI(); updateButtons();
 }
 function updatePlaybackUI() {
   $('toggle-play').setAttribute('aria-label', engine.playing ? '暫停' : '播放');
   $('toggle-play').querySelector('use').setAttribute('href', engine.playing ? '#i-pause' : '#i-play');
   $('playhead-time').textContent = formatTime(seconds(cursor));
-  $('junction-preview-status').hidden = !junctionPlayback;
-  if (junctionPlayback && $('junction-preview-status').textContent !== junctionPlayback) $('junction-preview-status').textContent = junctionPlayback;
+  $('junction-preview-status').hidden = !junctionPlayback && !junctionLoop;
+  const status = junctionPlayback || (junctionLoop ? '循環預聽調整中：放開方向鍵或把手後，會自動播放新接點。L／Esc 停止。' : '');
+  if ($('junction-preview-status').textContent !== status) $('junction-preview-status').textContent = status;
+  $('loop-junction').setAttribute('aria-pressed', String(junctionLoop));
+  $('loop-junction-label').textContent = junctionLoop ? '停止循環' : '循環預聽';
   wave.update(ranges(), selection, cursor, pendingDeletions);
 }
-async function startPlayback(parts = outputRanges(), from = cursor, junction = null) {
+async function startPlayback(parts = outputRanges(), from = cursor, junction = null, { loop = false } = {}) {
   if (!engine.buffer || !parts.length) return;
   pause(); const request = ++playingRequest;
-  junctionPlayback = junction; updatePlaybackUI();
+  junctionPlayback = junction; junctionLoop = loop; updatePlaybackUI(); updateButtons();
   try {
-    await engine.play(parts, from);
-    if (request !== playingRequest) { if (!engine.playing) engine.pause(); return; }
+    await engine.play(parts, from, { loop });
+    if (request !== playingRequest) return;
     tick();
   } catch { if (request === playingRequest) { pause(); notify('無法播放音檔，請確認瀏覽器允許播放音訊。', true); } }
 }
-function previewCurrentJunction() {
+function previewCurrentJunction({ loop = false } = {}) {
   if (!engine.buffer || wave.drag) return;
-  wave.finishKeyboardEdit();
+  // Explicit preview commands replace the audition after committing a held nudge.
+  if (wave.keyboardEdit) { junctionLoop = false; wave.finishKeyboardEdit(); }
   const index = selectedPendingIndex();
-  if (index < 0) { notify('請先用 ↑／↓ 選取待刪段落，再按 P 預聽接點。'); return; }
+  if (index < 0) { pause(); notify('請先用 ↑／↓ 選取待刪段落，再按 P 或 L 預聽接點。'); return; }
   const preview = junctionPreview(outputRanges(), pendingDeletions[index], Math.round(engine.buffer.sampleRate * 1.5));
   if (!preview.parts.length) { pause(); notify('刪除後沒有保留音訊，無法預聽接點。'); return; }
   const context = !preview.beforeFrames ? '位於結果開頭，僅預聽保留的後段' : !preview.afterFrames ? '位於結果結尾，僅預聽保留的前段' : '接點前 → 接點後';
-  const status = `預聽待刪 ${String(index + 1).padStart(2, '0')} 接點 · ${context}（前 ${seconds(preview.beforeFrames).toFixed(3)} 秒／後 ${seconds(preview.afterFrames).toFixed(3)} 秒）· P 重聽，Esc 停止`;
-  clearNotice(); startPlayback(preview.parts, preview.parts[0][0], status);
+  const status = `${loop ? '循環預聽' : '預聽'}待刪 ${String(index + 1).padStart(2, '0')} 接點 · ${context}（前 ${seconds(preview.beforeFrames).toFixed(3)} 秒／後 ${seconds(preview.afterFrames).toFixed(3)} 秒）· ${loop ? '微調後自動重聽，L／Esc 停止' : 'P 重聽，Esc 停止'}`;
+  clearNotice(); startPlayback(preview.parts, preview.parts[0][0], status, { loop });
+}
+function toggleJunctionLoop() {
+  if (junctionLoop) pause();
+  else previewCurrentJunction({ loop:true });
 }
 function tick() {
   cursor = engine.currentFrame();
@@ -419,6 +436,7 @@ document.querySelectorAll('[data-pending-mode]').forEach(button => button.addEve
 }));
 $('preview-deletions').addEventListener('click', () => startPlayback(outputRanges(), 0));
 $('preview-junction').addEventListener('click', () => { previewCurrentJunction(); $('waveform').focus({ preventScroll:true }); });
+$('loop-junction').addEventListener('click', () => { toggleJunctionLoop(); $('waveform').focus({ preventScroll:true }); });
 $('keep-selection').addEventListener('click', () => edit('keep'));
 $('undo').addEventListener('click', () => navigateHistory('undo'));
 $('redo').addEventListener('click', () => navigateHistory('redo'));
@@ -440,6 +458,9 @@ document.addEventListener('keydown', event => {
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p' && !wave.drag) {
     event.preventDefault(); if (!event.repeat) previewCurrentJunction(); return;
   }
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'l' && !wave.drag) {
+    event.preventDefault(); if (!event.repeat) toggleJunctionLoop(); return;
+  }
   const pendingShortcut = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ['ArrowUp','ArrowDown','1','2','3'].includes(event.key);
   if (pendingShortcut && pendingDeletions.length && !wave.drag) {
     event.preventDefault();
@@ -452,7 +473,7 @@ document.addEventListener('keydown', event => {
     } else activatePending(Math.max(0, index), { '1':'move', '2':'start', '3':'end' }[event.key]);
     return;
   }
-  if (pendingEdit) { if (event.key === 'Escape') { event.preventDefault(); wave.cancelDrag(); } return; }
+  if (pendingEdit) { if (event.key === 'Escape') { event.preventDefault(); pause(); wave.cancelDrag(); } return; }
   if (event.key === 'Escape' && junctionPlayback) { event.preventDefault(); pause(); return; }
   const modified = event.ctrlKey || event.metaKey;
   if (modified && event.key.toLowerCase() === 'z') { event.preventDefault(); (event.shiftKey ? $('redo') : $('undo')).click(); }

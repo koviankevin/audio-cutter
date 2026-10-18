@@ -72,11 +72,11 @@
             <div class="segments-heading"><h2>待刪除段落 <span id="pending-count">0</span></h2><button id="clear-deletions" class="text-button">清空清單</button></div>
             <p id="pending-summary" class="pending-summary" role="status"></p>
             <div class="pending-keyboard-tools" role="group" aria-label="待刪段落鍵盤調整目標"><span>方向鍵微調</span><button type="button" data-pending-mode="move" aria-pressed="true" aria-keyshortcuts="1" title="整段移動：1">整段移動 <kbd>1</kbd></button><button type="button" data-pending-mode="start" aria-pressed="false" aria-keyshortcuts="2" title="調整起點：2">起點 <kbd>2</kbd></button><button type="button" data-pending-mode="end" aria-pressed="false" aria-keyshortcuts="3" title="調整終點：3">終點 <kbd>3</kbd></button></div>
-            <p id="pending-shortcut-hint" class="pending-keyboard-hint"><kbd>↑</kbd> 上一段 · <kbd>↓</kbd> 下一段（保留調整模式）· <kbd>P</kbd> 預聽接點 · <kbd>Esc</kbd> 停止</p>
+            <p id="pending-shortcut-hint" class="pending-keyboard-hint"><kbd>↑</kbd> 上一段 · <kbd>↓</kbd> 下一段 · <kbd>P</kbd> 單次預聽 · <kbd>L</kbd> 循環開／關 · <kbd>Esc</kbd> 停止</p>
             <p id="pending-keyboard-hint" class="pending-keyboard-hint">按 ↓ 選第一段，↑ 選最後一段；也可點選清單或橘色段落。</p>
             <ol id="pending-list" class="segment-list pending-list"></ol>
-            <div class="pending-actions"><button id="apply-deletions" class="button danger-soft"><svg><use href="#i-scissors"/></svg>一次刪除清單</button><button id="preview-deletions" class="button subtle"><svg><use href="#i-play"/></svg>預聽刪除後</button><button id="preview-junction" class="button queue-add" aria-keyshortcuts="P" title="預聽目前接點前後各 1.5 秒：P；重按可重聽，Esc 停止"><svg><use href="#i-play"/></svg>預聽接點 <kbd>P</kbd></button></div>
-            <p class="pending-keyboard-hint">接點預聽會跳過待刪音訊，播放前後各 1.5 秒；不足時縮短該側。</p>
+            <div class="pending-actions"><button id="apply-deletions" class="button danger-soft"><svg><use href="#i-scissors"/></svg>一次刪除清單</button><button id="preview-deletions" class="button subtle"><svg><use href="#i-play"/></svg>預聽刪除後</button><button id="preview-junction" class="button queue-add" aria-keyshortcuts="P" title="預聽目前接點前後各 1.5 秒：P；重按可重聽，Esc 停止"><svg><use href="#i-play"/></svg>預聽接點 <kbd>P</kbd></button><button id="loop-junction" class="button queue-add" aria-pressed="false" aria-keyshortcuts="L" title="L 開啟或停止接點循環；微調後自動播放新接點"><svg><use href="#i-play"/></svg><span id="loop-junction-label">循環預聽</span><kbd>L</kbd></button></div>
+            <p class="pending-keyboard-hint">接點前後各 1.5 秒；循環中微調會先暫停，放開方向鍵或把手後自動播放新接點。</p>
             <p id="junction-preview-status" class="junction-preview-status" role="status" hidden></p>
             <p class="multi-select-hint">拖曳橘色段落中間可整段平移，長度不變；左右把手可調整起訖點。也可點選段落後，切換上方目標，以 ← → 微調；Shift 加大幅度。長按到放開算一步，Ctrl+Z 復原，Esc 取消。平移遇到其他段落或已刪除區域會停止。</p>
           </section>

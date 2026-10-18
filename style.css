@@ -13,3 +13,4 @@
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition:none!important}}
 .pending-keyboard-tools kbd,.pending-keyboard-hint kbd{font:inherit;font-size:9px;border:1px solid #dfd1b6;border-radius:3px;padding:0 4px;background:#fffefa;color:#9b7c47;margin-left:2px}
 .pending-actions kbd{font:inherit;font-size:9px;border:1px solid #b6d2c4;border-radius:3px;padding:0 4px}.junction-preview-status{margin:8px 0;padding:8px 10px;border:1px solid #c9dfd4;border-radius:6px;background:#edf7f1;color:#386e58;font-size:11px}
+#loop-junction[aria-pressed="true"]{background:var(--teal);border-color:var(--teal);color:#fff}#loop-junction[aria-pressed="true"] kbd{color:#fff;border-color:#ffffff70}

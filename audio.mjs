@@ -10,7 +10,7 @@ export class AudioEngine {
     const bytes = await file.arrayBuffer();
     return this.getContext().decodeAudioData(bytes);
   }
-  async play(ranges, fromFrame = 0) {
+  async play(ranges, fromFrame = 0, { loop = false } = {}) {
     this.pause();
     const generation = this.generation;
     const queue = intersect(ranges, [fromFrame, this.buffer.length]);
@@ -21,7 +21,23 @@ export class AudioEngine {
     if (generation !== this.generation || !this.buffer) return;
     this.startedAt = context.currentTime + 0.035;
     this.playing = true;
+    this.looping = loop;
     this.position = this.queue[0][0];
+    this.playDuration = totalFrames(this.queue) / this.buffer.sampleRate;
+    if (loop) {
+      // Only the short junction context is copied, never the full source recording.
+      const preview = context.createBuffer(this.buffer.numberOfChannels, totalFrames(this.queue), this.buffer.sampleRate);
+      let offset = 0;
+      for (const [a, b] of this.queue) {
+        for (let channel = 0; channel < this.buffer.numberOfChannels; channel++) {
+          preview.copyToChannel(this.buffer.getChannelData(channel).subarray(a, b), channel, offset);
+        }
+        offset += b - a;
+      }
+      const node = context.createBufferSource(); node.buffer = preview; node.loop = true;
+      node.connect(context.destination); node.start(this.startedAt); this.nodes.push(node);
+      return;
+    }
     let offset = 0;
     for (const [a, b] of this.queue) {
       const node = context.createBufferSource();
@@ -35,13 +51,14 @@ export class AudioEngine {
   currentFrame() {
     if (!this.playing) return this.position;
     const elapsed = Math.max(0, this.context.currentTime - this.startedAt);
-    return Math.round(frameAtOffset(this.queue, Math.min(elapsed, this.playDuration) * this.buffer.sampleRate));
+    const offset = this.looping ? elapsed % this.playDuration : Math.min(elapsed, this.playDuration);
+    return Math.round(frameAtOffset(this.queue, offset * this.buffer.sampleRate));
   }
-  get ended() { return this.playing && this.context.currentTime >= this.startedAt + this.playDuration; }
+  get ended() { return this.playing && !this.looping && this.context.currentTime >= this.startedAt + this.playDuration; }
   pause() {
     this.generation++;
     this.position = this.currentFrame();
-    this.playing = false;
+    this.playing = false; this.looping = false;
     for (const node of this.nodes) { try { node.stop(); } catch {} node.disconnect(); }
     this.nodes = [];
     return this.position;
