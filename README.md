@@ -69,6 +69,25 @@ npm run test:browser
 
 設定 `SITE_URL=https://koviankevin.github.io/audio-cutter/` 可對已部署網站執行相同的驗收流程。
 
+### 效能檢查
+
+執行 `node tests/performance.mjs` 可量測播放、120 個待刪段落、連續 40 次方向鍵微調，以及波形快取在縮放／捲動時是否正確更新。可用 `BROWSER_CHANNEL=chrome` 或 `msedge` 選擇瀏覽器；`PERF_LABEL=after` 決定報告檔名。報告寫入忽略於 Git 的 `test-results/performance-*/`。
+
+`LONG_AUDIO=1` 另建立 29 分鐘立體聲靜音 WAV，驗證載入、接點循環、MP3 匯出取消、兩分鐘片段的 WAV 匯出及換檔。`PROFILE_IMPORT=1` 會額外儲存載入時的 CPU profile。記憶體數據採 Chrome DevTools 的 backing storage；換檔後強制 GC，以確認舊音訊緩衝區沒有持續留存，並非完整程序的記憶體用量。
+
+2026-10-19 桌面 Chrome、1440×1080 的同機檢查，優化前為 `aa24067`；時間會隨電腦、瀏覽器與背景負載變動：
+
+| 測試 | 優化前 | 優化後 |
+| --- | ---: | ---: |
+| 播放 1.6 秒的繪圖函式累計耗時 | 約 79 ms | 約 8–10 ms |
+| 120 段、同步連續 40 次微調 | 約 1,117 ms | 約 93–114 ms |
+| 上述微調新增／移除的清單 DOM 節點 | 9,840 | 18 |
+| 一次計算 2,000 個刪除區間（20 次平均） | 約 122 ms | 約 1.1 ms |
+
+波形與標記變動時才重建靜態圖層；播放僅更新播放游標。不變的文字及按鈕不再每幀重寫，清單重用既有列，刪除區間則以排序後的單次掃描處理。效能測試會防止靜態波形每幀重畫與整份清單重建再次出現。
+
+29 分鐘立體聲 WAV 本機載入約 3.3–3.6 秒，解碼 PCM 約 585 MiB；換檔並 GC 後，量到的 backing storage 約由 586 MiB 降至 6.4 MiB。兩分鐘 WAV 匯出並儲存約 1.1 秒，匯出取消操作約 60 ms。播放及循環測試未見超過 50 ms 的主執行緒工作；長檔載入期間仍量到約 0.33 秒的單次停頓。這些數字僅代表本次合成檔案測試；完整載入／解碼仍是長檔的主要記憶體成本，若要進一步支援低記憶體裝置，需另行設計分段讀取與解碼。
+
 ## GitHub Pages
 
 網站：[音剪](https://koviankevin.github.io/audio-cutter/)。公開儲存庫：[koviankevin/audio-cutter](https://github.com/koviankevin/audio-cutter)。

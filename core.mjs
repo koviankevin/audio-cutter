@@ -49,7 +49,23 @@ export function deletedRanges(ranges, length) {
 
 export function subtractMany(ranges, removals) {
   const length = ranges.at(-1)?.[1] ?? 0;
-  return normalize(removals, length).reduce((kept, removal) => subtract(kept, removal), ranges.map(range => [...range]));
+  const cuts = normalize(removals, length), result = [];
+  let index = 0;
+  // Both timelines are ordered: visit each interval once instead of copying an
+  // ever-growing retained list for every individual removal.
+  for (const [start, end] of ranges) {
+    let cursor = start;
+    while (index < cuts.length && cuts[index][1] <= cursor) index++;
+    while (index < cuts.length && cuts[index][0] < end) {
+      const [a, b] = cuts[index];
+      if (a > cursor) result.push([cursor, a]);
+      cursor = Math.max(cursor, b);
+      if (cursor >= end) break;
+      index++;
+    }
+    if (cursor < end) result.push([cursor, end]);
+  }
+  return result;
 }
 
 // Take context from the final retained timeline, including any other cuts in it.

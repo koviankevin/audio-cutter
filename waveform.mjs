@@ -4,6 +4,7 @@ export class Waveform {
   constructor(canvas, onSelection, onSeek, onAddSelection = () => {}, onEditPending = () => {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.background = document.createElement('canvas'); this.backgroundKey = '';
     this.onSelection = onSelection; this.onSeek = onSeek; this.onAddSelection = onAddSelection;
     this.onEditPending = onEditPending;
     this.zoom = 1; this.scroll = 0; this.playhead = 0;
@@ -26,6 +27,7 @@ export class Waveform {
   setAudio(buffer, peaks) {
     this.length = buffer.length; this.sampleRate = buffer.sampleRate; this.peaks = peaks;
     this.zoom = 1; this.scroll = 0; this.playhead = 0; this.pendingMode = 'move';
+    this.backgroundKey = '';
   }
   update(ranges, selection, playhead, pending = []) {
     this.ranges = ranges; this.selection = selection; this.playhead = playhead; this.pending = pending; this.draw();
@@ -188,7 +190,22 @@ export class Waveform {
     if (this.canvas.width !== Math.round(width * dpr) || this.canvas.height !== Math.round(height * dpr)) {
       this.canvas.width = Math.round(width * dpr); this.canvas.height = Math.round(height * dpr);
     }
-    const ctx = this.ctx; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, width, height);
+    const key = JSON.stringify([width, height, dpr, this.zoom, this.scroll, this.ranges, this.selection, this.pending]);
+    if (this.backgroundKey !== key) {
+      this.background.width = this.canvas.width; this.background.height = this.canvas.height;
+      const background = this.background.getContext('2d'); background.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.drawBackground(background, width, height); this.backgroundKey = key;
+    }
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.drawImage(this.background, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cursor = (this.playhead - this.viewStart) / this.viewLength * width, top = 31, bottom = height - 24;
+    if (cursor >= 0 && cursor <= width) {
+      ctx.strokeStyle = '#14796c'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(cursor, top - 5); ctx.lineTo(cursor, bottom + 3); ctx.stroke();
+      ctx.fillStyle = '#14796c'; ctx.beginPath(); ctx.moveTo(cursor - 4, top - 7); ctx.lineTo(cursor + 4, top - 7); ctx.lineTo(cursor, top - 2); ctx.fill();
+    }
+  }
+  drawBackground(ctx, width, height) {
     const top = 31, bottom = height - 24, middle = (top + bottom) / 2, amplitude = (bottom - top) * 0.45;
     const xOf = frame => (frame - this.viewStart) / this.viewLength * width;
     const selectedStart = Math.max(0, xOf(this.selection[0]));
@@ -259,11 +276,6 @@ export class Waveform {
         ctx.moveTo(left + 3, middle - 7); ctx.lineTo(left + 3, middle + 7);
         ctx.moveTo(left + 5, middle - 7); ctx.lineTo(left + 5, middle + 7); ctx.stroke();
       }
-    }
-    const cursor = xOf(this.playhead);
-    if (cursor >= 0 && cursor <= width) {
-      ctx.strokeStyle = '#14796c'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(cursor, top - 5); ctx.lineTo(cursor, bottom + 3); ctx.stroke();
-      ctx.fillStyle = '#14796c'; ctx.beginPath(); ctx.moveTo(cursor - 4, top - 7); ctx.lineTo(cursor + 4, top - 7); ctx.lineTo(cursor, top - 2); ctx.fill();
     }
     ctx.textAlign = 'right'; ctx.fillStyle = '#9aac94'; ctx.font = '8px "Segoe UI", sans-serif'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - 10);
   }

@@ -3,6 +3,8 @@ import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 
 const $ = id => document.getElementById(id);
+const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
+const setAttribute = (element, name, value) => { if (element.getAttribute(name) !== value) element.setAttribute(name, value); };
 const engine = new AudioEngine();
 const history = new History({ ranges:[], pending:[], selection:[0,0], cursor:0 });
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
@@ -12,6 +14,7 @@ let keptRanges = [];
 let pendingEdit = null;
 let junctionPlayback = null;
 let junctionLoop = false;
+let segmentsKey = null;
 const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true), editPendingRange);
 const ranges = () => keptRanges;
 const outputRanges = () => subtractMany(ranges(), pendingDeletions);
@@ -66,24 +69,25 @@ function updateButtons() {
   $('preview-junction').disabled = !hasOutput || selectedPendingIndex() < 0;
   $('loop-junction').disabled = !junctionLoop && (!hasOutput || selectedPendingIndex() < 0);
   $('export-button').disabled = !hasAudio || !!exportJob || !hasOutput;
-  $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔'}`;
+  const exportLabel = pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔';
+  if ($('export-button').textContent !== exportLabel) $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${exportLabel}`;
   $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : signature(ranges()) === signature([[0, engine.buffer?.length]]) ? '原始音檔' : '已匯出';
 }
-function updateSelectionFields() {
+function updateSelectionFields({ drawWave = true } = {}) {
   $('selection-start').value = formatTime(seconds(selection[0]));
   $('selection-end').value = formatTime(seconds(selection[1]));
   $('selection-start').removeAttribute('aria-invalid'); $('selection-end').removeAttribute('aria-invalid');
   $('selection-duration').textContent = `${seconds(selection[1] - selection[0]).toFixed(3)} 秒`;
-  updateButtons(); wave.update(ranges(), selection, cursor, pendingDeletions);
+  updateButtons(); if (drawWave) wave.update(ranges(), selection, cursor, pendingDeletions);
   updatePendingKeyboardUI();
 }
 function updatePendingKeyboardUI() {
   const index = selectedPendingIndex();
   document.querySelectorAll('[data-pending-mode]').forEach(button => {
     button.disabled = index < 0;
-    button.setAttribute('aria-pressed', String(button.dataset.pendingMode === wave.pendingMode));
+    setAttribute(button, 'aria-pressed', String(button.dataset.pendingMode === wave.pendingMode));
   });
-  document.querySelectorAll('#pending-list .pending-time').forEach((button, i) => button.setAttribute('aria-pressed', String(i === index)));
+  document.querySelectorAll('#pending-list .pending-time').forEach((button, i) => setAttribute(button, 'aria-pressed', String(i === index)));
   const mode = { move:'整段移動', start:'起點', end:'終點' }[wave.pendingMode] || '整段移動';
   $('pending-keyboard-hint').textContent = index < 0 ? '按 ↓ 選第一段，↑ 選最後一段；也可點選清單或橘色段落。' : `待刪 ${String(index + 1).padStart(2, '0')}／${pendingDeletions.length} · ${mode} · ← → 10 毫秒，Shift + ← → 100 毫秒。`;
 }
@@ -126,6 +130,9 @@ function applyTimeFields() {
   clearNotice(); setSelection([Math.round(start * SAMPLE_RATE), endFrame]); return true;
 }
 function renderSegments() {
+  const key = signature(ranges());
+  if (segmentsKey === key) return;
+  segmentsKey = key;
   $('segment-list').replaceChildren();
   ranges().forEach(([a, b], index) => {
     const li = document.createElement('li');
@@ -151,26 +158,31 @@ function render({ normalizeQueue = true } = {}) {
   const removed = engine.buffer.length - totalFrames(ranges());
   $('output-duration').previousElementSibling.textContent = pendingDeletions.length ? '預計匯出長度' : '剪輯後長度';
   $('trim-summary').textContent = pendingDeletions.length ? `待套用 ${pendingDeletions.length} 段 · 共 ${formatTime(seconds(totalFrames(normalizedPending())))}` : removed ? `已剪去 ${formatTime(seconds(removed))} · ${ranges().length} 個保留片段` : '尚未刪除任何段落';
-  renderSegments(); renderPending(); updateSelectionFields(); updatePlaybackUI();
+  renderSegments(); renderPending(); updateSelectionFields({ drawWave:false }); updatePlaybackUI();
 }
 function renderPending() {
   $('pending-panel').hidden = !pendingDeletions.length;
   $('pending-legend').hidden = !pendingDeletions.length;
   $('pending-count').textContent = pendingDeletions.length;
-  $('pending-list').replaceChildren();
+  const list = $('pending-list');
+  while (list.children.length > pendingDeletions.length) list.lastElementChild.remove();
   pendingDeletions.forEach(([a, b], index) => {
-    const li = document.createElement('li');
-    const number = document.createElement('span'); number.textContent = String(index + 1).padStart(2, '0');
-    const times = document.createElement('button'); times.type = 'button'; times.className = 'text-button pending-time';
-    times.textContent = `${formatTime(seconds(a))} — ${formatTime(seconds(b))}`;
-    times.setAttribute('aria-label', `選取待刪段落 ${index + 1}`);
-    times.addEventListener('click', () => activatePending(index, 'move'));
-    const duration = document.createElement('span'); duration.textContent = `${seconds(b - a).toFixed(3)} 秒`;
-    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'icon-button';
-    remove.setAttribute('aria-label', `移除待刪段落 ${index + 1}`); remove.title = '從待刪清單移除，保留這段音訊';
-    remove.innerHTML = '<svg aria-hidden="true"><use href="#i-close"/></svg>';
-    remove.addEventListener('click', () => { pause(); const before = captureState(); pendingDeletions.splice(index, 1); recordEdit(before); clearNotice(); render(); });
-    li.append(number, times, duration, remove); $('pending-list').append(li);
+    let li = list.children[index];
+    if (!li) {
+      li = document.createElement('li');
+      const number = document.createElement('span'); number.textContent = String(index + 1).padStart(2, '0');
+      const times = document.createElement('button'); times.type = 'button'; times.className = 'text-button pending-time';
+      times.setAttribute('aria-label', `選取待刪段落 ${index + 1}`);
+      times.addEventListener('click', () => activatePending(index, 'move'));
+      const duration = document.createElement('span');
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'icon-button';
+      remove.setAttribute('aria-label', `移除待刪段落 ${index + 1}`); remove.title = '從待刪清單移除，保留這段音訊';
+      remove.innerHTML = '<svg aria-hidden="true"><use href="#i-close"/></svg>';
+      remove.addEventListener('click', () => { pause(); const before = captureState(); pendingDeletions.splice(index, 1); recordEdit(before); clearNotice(); render(); });
+      li.append(number, times, duration, remove); list.append(li);
+    }
+    setText(li.children[1], `${formatTime(seconds(a))} — ${formatTime(seconds(b))}`);
+    setText(li.children[2], `${seconds(b - a).toFixed(3)} 秒`);
   });
   $('pending-summary').textContent = `共 ${formatTime(seconds(totalFrames(normalizedPending())))} · 刪除後長度 ${formatTime(seconds(totalFrames(outputRanges())))}`;
 }
@@ -222,15 +234,17 @@ function pause({ keepJunctionLoop = false } = {}) {
   cancelAnimationFrame(animation); updatePlaybackUI(); updateButtons();
 }
 function updatePlaybackUI() {
-  $('toggle-play').setAttribute('aria-label', engine.playing ? '暫停' : '播放');
-  $('toggle-play').querySelector('use').setAttribute('href', engine.playing ? '#i-pause' : '#i-play');
-  $('playhead-time').textContent = formatTime(seconds(cursor));
-  $('junction-preview-status').hidden = !junctionPlayback && !junctionLoop;
+  // Read/draw before changing text, so cursor animation doesn't force a layout.
+  wave.update(ranges(), selection, cursor, pendingDeletions);
+  setAttribute($('toggle-play'), 'aria-label', engine.playing ? '暫停' : '播放');
+  setAttribute($('toggle-play').querySelector('use'), 'href', engine.playing ? '#i-pause' : '#i-play');
+  setText($('playhead-time'), formatTime(seconds(cursor)));
+  const hidden = !junctionPlayback && !junctionLoop;
+  if ($('junction-preview-status').hidden !== hidden) $('junction-preview-status').hidden = hidden;
   const status = junctionPlayback || (junctionLoop ? '循環預聽調整中：放開方向鍵或把手後，會自動播放新接點。L／Esc 停止。' : '');
   if ($('junction-preview-status').textContent !== status) $('junction-preview-status').textContent = status;
-  $('loop-junction').setAttribute('aria-pressed', String(junctionLoop));
-  $('loop-junction-label').textContent = junctionLoop ? '停止循環' : '循環預聽';
-  wave.update(ranges(), selection, cursor, pendingDeletions);
+  setAttribute($('loop-junction'), 'aria-pressed', String(junctionLoop));
+  setText($('loop-junction-label'), junctionLoop ? '停止循環' : '循環預聽');
 }
 async function startPlayback(parts = outputRanges(), from = cursor, junction = null, { loop = false } = {}) {
   if (!engine.buffer || !parts.length) return;

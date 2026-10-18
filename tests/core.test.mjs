@@ -36,6 +36,17 @@ test('bulk deletion merges unordered overlapping and duplicate ranges without do
   assert.deepEqual(subtractMany([], [[0,100]]), []);
 });
 
+test('bulk deletion agrees with sequential cuts across seeded random gaps and sample boundaries', () => {
+  let seed = 71219;
+  const random = max => { seed = (Math.imul(seed,1664525)+1013904223) >>> 0; return seed % max; };
+  for (let trial = 0; trial < 200; trial++) {
+    const ranges = normalize(Array.from({length:20},()=>{const a=random(200);return [a,a+1+random(15)];}),220);
+    const removals = Array.from({length:25},()=>{const a=random(240)-10;return [a,a+random(30)];});
+    const expected = normalize(removals,ranges.at(-1)?.[1]??0).reduce((kept,cut)=>subtract(kept,cut),structuredClone(ranges));
+    assert.deepEqual(subtractMany(ranges,removals),expected);
+  }
+});
+
 test('junction preview takes retained context across every pending and committed cut', () => {
   const source = [[0,100]], removals = [[20,40],[45,50],[55,80]];
   const kept = subtractMany(source, removals), original = structuredClone(kept);
