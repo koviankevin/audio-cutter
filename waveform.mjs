@@ -1,16 +1,19 @@
 import { deletedRanges, formatTime } from './core.mjs';
 
 export class Waveform {
-  constructor(canvas, onSelection, onSeek, onAddSelection = () => {}) {
+  constructor(canvas, onSelection, onSeek, onAddSelection = () => {}, onEditPending = () => {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.onSelection = onSelection; this.onSeek = onSeek; this.onAddSelection = onAddSelection;
+    this.onEditPending = onEditPending;
     this.zoom = 1; this.scroll = 0; this.playhead = 0;
     this.observer = new ResizeObserver(() => this.draw()); this.observer.observe(canvas);
     canvas.addEventListener('pointerdown', event => this.pointerDown(event));
     canvas.addEventListener('pointermove', event => this.pointerMove(event));
     canvas.addEventListener('pointerup', event => this.pointerUp(event));
-    canvas.addEventListener('pointercancel', () => { this.drag = null; });
+    canvas.addEventListener('pointercancel', event => { if (event.pointerId === this.drag?.pointerId) this.cancelDrag(); });
+    canvas.addEventListener('lostpointercapture', event => { if (event.pointerId === this.drag?.pointerId) this.cancelDrag(); });
+    canvas.addEventListener('pointerleave', () => { if (!this.drag) delete canvas.dataset.cursor; });
     canvas.addEventListener('keydown', event => {
       if (!this.length || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
       event.preventDefault();
@@ -31,33 +34,84 @@ export class Waveform {
     return Math.round(Math.max(0, Math.min(this.length, this.viewStart + Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * this.viewLength)));
   }
   frameToX(frame) { return (frame - this.viewStart) / this.viewLength * this.canvas.getBoundingClientRect().width; }
+  pendingHandleAt(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    const y = event.clientY - rect.top, x = event.clientX - rect.left;
+    if (y < 31 || y > rect.height - 24) return null;
+    let closest = null, distance = event.pointerType === 'touch' ? 22 : 11;
+    for (const [index, range] of (this.pending || []).entries()) {
+      for (const [endpoint, frame] of range.entries()) {
+        const position = this.frameToX(frame), delta = Math.abs(position - x);
+        if (position >= 0 && position <= rect.width && delta <= distance) {
+          closest = { index, handle:endpoint === 0 ? 'start' : 'end', range:[...range] }; distance = delta;
+        }
+      }
+    }
+    return closest;
+  }
   pointerDown(event) {
-    if (!this.length || event.button !== 0) return;
+    if (!this.length || event.button !== 0 || this.drag || event.isPrimary === false) return;
+    event.preventDefault();
     this.canvas.focus({ preventScroll: true });
+    const pending = !event.shiftKey && this.pendingHandleAt(event);
+    if (pending) {
+      this.drag = { pointerId:event.pointerId, x:event.clientX, selection:pending.range, handle:pending.handle, pendingIndex:pending.index, moved:false };
+      this.canvas.dataset.cursor = 'resize'; this.canvas.setPointerCapture(event.pointerId);
+      this.onEditPending(pending.index, pending.range, 'start');
+      return;
+    }
     const frame = this.xToFrame(event.clientX);
     const x = event.clientX - this.canvas.getBoundingClientRect().left;
     const startDistance = Math.abs(this.frameToX(this.selection[0]) - x);
     const endDistance = Math.abs(this.frameToX(this.selection[1]) - x);
     const handle = !event.shiftKey && Math.min(startDistance, endDistance) < 11 ? (startDistance <= endDistance ? 'start' : 'end') : null;
-    this.drag = { frame, x: event.clientX, selection: [...this.selection], handle, moved: false, additive: event.shiftKey };
+    this.drag = { frame, x: event.clientX, pointerId:event.pointerId, selection: [...this.selection], handle, moved: false, additive: event.shiftKey };
     this.canvas.setPointerCapture(event.pointerId);
   }
   pointerMove(event) {
-    if (!this.drag) return;
+    if (!this.drag) {
+      if (!event.shiftKey && this.pendingHandleAt(event)) this.canvas.dataset.cursor = 'resize';
+      else delete this.canvas.dataset.cursor;
+      return;
+    }
+    if (event.pointerId !== this.drag.pointerId) return;
     const frame = this.xToFrame(event.clientX);
     if (Math.abs(event.clientX - this.drag.x) > 2) this.drag.moved = true;
     if (!this.drag.moved) return;
+    if (this.drag.pendingIndex !== undefined) {
+      const range = [...this.drag.selection];
+      const gap = Math.min(range[1] - range[0], Math.max(1, Math.round(this.sampleRate / 1000)));
+      if (this.drag.handle === 'start') range[0] = Math.min(frame, range[1] - gap);
+      else range[1] = Math.max(frame, range[0] + gap);
+      this.onEditPending(this.drag.pendingIndex, range, 'update');
+      return;
+    }
     let start = this.drag.frame, end = frame;
     if (this.drag.handle === 'start') { start = frame; end = this.drag.selection[1]; }
     if (this.drag.handle === 'end') { start = this.drag.selection[0]; end = frame; }
     this.onSelection([Math.min(start, end), Math.max(start, end)]);
   }
   pointerUp(event) {
-    if (!this.drag) return;
+    if (!this.drag || event.pointerId !== this.drag.pointerId) return;
+    if (this.drag.pendingIndex !== undefined) {
+      this.pointerMove(event);
+      const index = this.drag.pendingIndex;
+      this.drag = null; delete this.canvas.dataset.cursor;
+      if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
+      this.onEditPending(index, null, 'end');
+      return;
+    }
     if (!this.drag.moved) this.onSeek(this.xToFrame(event.clientX));
     else if (this.drag.additive) this.onAddSelection();
     this.drag = null;
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
+  }
+  cancelDrag() {
+    const drag = this.drag;
+    if (!drag) return;
+    this.drag = null; delete this.canvas.dataset.cursor;
+    if (this.canvas.hasPointerCapture(drag.pointerId)) this.canvas.releasePointerCapture(drag.pointerId);
+    if (drag.pendingIndex !== undefined) this.onEditPending(drag.pendingIndex, null, 'cancel');
   }
   draw() {
     if (!this.length || !this.ranges || !this.peaks) return;
@@ -121,11 +175,22 @@ export class Waveform {
     }
     if (selectedEnd > selectedStart) {
       ctx.strokeStyle = '#81a984'; ctx.lineWidth = 1; ctx.strokeRect(selectedStart + .5, top + .5, selectedEnd - selectedStart - 1, bottom - top - 1);
-      for (const frame of this.selection) {
+      const selectedPending = (this.pending || []).some(([a, b]) => a === this.selection[0] && b === this.selection[1]);
+      for (const frame of selectedPending ? [] : this.selection) {
         const x = xOf(frame); if (x < 0 || x > width) continue;
         const left = Math.max(0, Math.min(width - 6, x - 3));
         ctx.fillStyle = '#628e6c'; ctx.fillRect(left, middle - 10, 6, 20);
         ctx.strokeStyle = '#f0f6eb'; ctx.beginPath(); ctx.moveTo(left + 3, middle - 5); ctx.lineTo(left + 3, middle + 5); ctx.stroke();
+      }
+    }
+    for (const range of this.pending || []) {
+      for (const frame of range) {
+        const x = xOf(frame); if (x < 0 || x > width) continue;
+        const left = Math.max(0, Math.min(width - 8, x - 4));
+        ctx.fillStyle = '#b1823a'; ctx.fillRect(left, middle - 14, 8, 28);
+        ctx.strokeStyle = '#fff5de'; ctx.lineWidth = 1; ctx.beginPath();
+        ctx.moveTo(left + 3, middle - 7); ctx.lineTo(left + 3, middle + 7);
+        ctx.moveTo(left + 5, middle - 7); ctx.lineTo(left + 5, middle + 7); ctx.stroke();
       }
     }
     const cursor = xOf(this.playhead);

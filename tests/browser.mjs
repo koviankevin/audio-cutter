@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
 import { wavHeader } from '../pcm.mjs';
+import { parseTime } from '../core.mjs';
 
 const modulePath = process.env.PLAYWRIGHT_MODULE;
 const { chromium } = await import(modulePath ? pathToFileURL(modulePath).href : 'playwright');
@@ -37,6 +38,23 @@ async function exportFile(format) {
   const download = await pending; const target = path.join(output, `edited.${format}`);
   await download.saveAs(target); return target;
 }
+async function queuedTimes(index = 0) {
+  return (await page.locator('#pending-list .pending-time').nth(index).textContent()).split(' — ').map(parseTime);
+}
+async function dragBoundary(from, to, { zoom = 1, scroll = 0, cancel = '', during = () => {} } = {}) {
+  const canvas = page.locator('#waveform'); await canvas.scrollIntoViewIfNeeded();
+  const bounds = await canvas.boundingBox();
+  const viewLength = 12 / zoom, viewStart = (12 - viewLength) * scroll;
+  const x = seconds => bounds.x + (seconds - viewStart) / viewLength * bounds.width;
+  const y = bounds.y + (31 + bounds.height - 24) / 2;
+  await canvas.evaluate(element => element.addEventListener('pointerdown', event => { window.testPointerId = event.pointerId; }, { once:true }));
+  await page.mouse.move(x(from), y); await page.mouse.down(); await page.mouse.move(x(to), y, { steps:8 });
+  await during();
+  if (cancel === 'escape') await page.keyboard.press('Escape');
+  else if (cancel === 'pointercancel') await canvas.evaluate(element => element.dispatchEvent(new PointerEvent('pointercancel', { pointerId:window.testPointerId, bubbles:true })));
+  await page.mouse.up();
+}
+const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < .03, `${message}: ${actual} vs ${expected}`);
 function peakAt(data, rate, seconds, frequency) {
   let real = 0, imaginary = 0; const count = Math.min(8192, data.length - Math.floor(seconds * rate));
   for (let i = 0; i < count; i++) {
@@ -103,6 +121,51 @@ try {
   assert.equal(await page.locator('#segment-count').textContent(),'1','queued selections must not delete audio yet');
   assert.equal(await page.locator('#undo').isDisabled(),true,'queueing is separate from committing an audio edit');
   assert.match(await page.locator('#pending-summary').textContent(),/00:04.000.*00:08.000/);
+  await dragBoundary(2,1,{during:async()=>{
+    near((await queuedTimes())[0],1,'left boundary updates while dragging');
+    near(parseTime(await page.locator('#output-duration').textContent()),7,'live projected duration');
+  }});
+  near((await queuedTimes())[1],4,'resizing start preserves end');
+  assert.deepEqual(await queuedTimes(1),[6,8],'another queued range stays unchanged');
+  await dragBoundary(4,5);
+  near((await queuedTimes())[0],1,'resizing end preserves start'); near((await queuedTimes())[1],5,'right boundary is editable');
+  await dragBoundary(8,9);
+  near((await queuedTimes(1))[1],9,'a non-active pending interval can be resized directly');
+  const beforeCancel = await queuedTimes();
+  await dragBoundary(1,.5,{cancel:'escape'});
+  assert.deepEqual(await queuedTimes(),beforeCancel,'Escape restores the interval before the gesture');
+  await page.screenshot({path:path.join(output,'05-resize-pending.png'),fullPage:true});
+  await dragBoundary(5,7,{during:async()=>{
+    assert.equal(await page.locator('#pending-count').textContent(),'2','keep the dragged index stable until release');
+    near(parseTime(await page.locator('#output-duration').textContent()),4,'overlapping draft ranges are counted only once');
+  }});
+  assert.equal(await page.locator('#pending-count').textContent(),'1','overlap merges when the handle is released');
+  near((await queuedTimes())[0],1,'merge preserves the union start'); near((await queuedTimes())[1],9,'merge preserves the union end');
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
+  await page.locator('#zoom').fill('2'); await page.locator('#zoom').dispatchEvent('input');
+  await page.locator('#wave-scroll').fill('500'); await page.locator('#wave-scroll').dispatchEvent('input');
+  await dragBoundary(4,4.5,{zoom:2,scroll:.5});
+  near((await queuedTimes())[0],2,'an offscreen start stays fixed'); near((await queuedTimes())[1],4.5,'zoomed/scrolled boundary follows pointer');
+  const beforePointerCancel = await queuedTimes();
+  await dragBoundary(4.5,5,{zoom:2,scroll:.5,cancel:'pointercancel'});
+  assert.deepEqual(await queuedTimes(),beforePointerCancel,'pointer cancellation restores the interval');
+  await page.locator('#zoom').fill('1'); await page.locator('#zoom').dispatchEvent('input');
+  await dragBoundary(2,-1);
+  assert.equal((await queuedTimes())[0],0,'left edge clamps to the start of the file');
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await dragBoundary(2,5);
+  const clamped = await queuedTimes();
+  assert.ok(clamped[0] < clamped[1] && clamped[0] > 3.99,'start cannot cross the end');
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await dragBoundary(4,13);
+  assert.equal((await queuedTimes())[1],12,'right edge clamps to the end of the file');
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
   await page.locator('#preview-deletions').click(); await page.waitForTimeout(100); await page.locator('#toggle-play').click();
   await page.screenshot({path:path.join(output,'04-multi-selection.png'),fullPage:true});
   await page.locator('#apply-deletions').click();
@@ -160,6 +223,14 @@ try {
       for (let channel = 0; channel < 2; channel++) assert.ok(Math.abs(original.readInt16LE(44+frame*4+channel*2) - result.readInt16LE(44+outputFrame*4+channel*2)) <= 1);
     }
   }
+  await page.locator('#reset').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
+  await dragBoundary(4,5);
+  const predicted = parseTime(await page.locator('#output-duration').textContent());
+  const resizedFile = await exportFile('wav'); const resizedBytes = await readFile(resizedFile);
+  const resizedDuration = (resizedBytes.length - 44) / 4 / 44100;
+  assert.ok(Math.abs(resizedDuration-predicted)<.001,'export includes the resized interval'); near(resizedDuration,7,'export duration reflects the dragged end');
   await page.locator('#reset').click();
   await select(2,4); await page.locator('#add-deletion').click();
   await select(6,8); await page.locator('#add-deletion').click();
@@ -249,7 +320,7 @@ try {
   const appRequests = requests.filter(request=>!environmentRequests.includes(request));
   await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
   assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
-  console.log(`PASS ${channel || 'chromium'}: bulk selections, overlap/duplicates, Shift drag, one-step delete and export, atomic undo, WAV exact samples, MP3 stereo, playback, cancellation, invalid files, responsive layout, subpath, local-only network.`);
+  console.log(`PASS ${channel || 'chromium'}: draggable pending edges, live duration, zoom/scroll, overlap merge, bounds, Escape/pointer cancellation, resized WAV export, bulk cuts, MP3 stereo, responsive layout, local-only network.`);
 } finally {
   await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
 }

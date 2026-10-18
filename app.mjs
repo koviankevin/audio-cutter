@@ -8,9 +8,11 @@ const history = new History([]);
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
 let pendingDeletions = [];
-const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true));
+let pendingEdit = null;
+const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true), editPendingRange);
 const ranges = () => history.current;
 const outputRanges = () => subtractMany(ranges(), pendingDeletions);
+const normalizedPending = () => normalize(pendingDeletions.flatMap(part => intersect(ranges(), part)), engine.buffer?.length ?? 0);
 const dirty = () => !!engine.buffer && signature(ranges()) !== savedSignature;
 const seconds = frames => frames / (engine.buffer?.sampleRate || SAMPLE_RATE);
 
@@ -81,16 +83,16 @@ function renderSegments() {
   $('segment-count').textContent = ranges().length;
   $('empty-segments').hidden = ranges().length > 0;
 }
-function render() {
+function render({ normalizeQueue = true } = {}) {
   if (!engine.buffer) return;
-  pendingDeletions = normalize(pendingDeletions.flatMap(part => intersect(ranges(), part)), engine.buffer.length);
+  if (normalizeQueue) pendingDeletions = normalizedPending();
   const outputTime = formatTime(seconds(totalFrames(outputRanges())));
   const [base, millis] = outputTime.split('.');
   $('output-duration').replaceChildren(document.createTextNode(base));
   const tail = document.createElement('span'); tail.textContent = `.${millis}`; $('output-duration').append(tail);
   const removed = engine.buffer.length - totalFrames(ranges());
   $('output-duration').previousElementSibling.textContent = pendingDeletions.length ? '預計匯出長度' : '剪輯後長度';
-  $('trim-summary').textContent = pendingDeletions.length ? `待套用 ${pendingDeletions.length} 段 · 共 ${formatTime(seconds(totalFrames(pendingDeletions)))}` : removed ? `已剪去 ${formatTime(seconds(removed))} · ${ranges().length} 個保留片段` : '尚未刪除任何段落';
+  $('trim-summary').textContent = pendingDeletions.length ? `待套用 ${pendingDeletions.length} 段 · 共 ${formatTime(seconds(totalFrames(normalizedPending())))}` : removed ? `已剪去 ${formatTime(seconds(removed))} · ${ranges().length} 個保留片段` : '尚未刪除任何段落';
   renderSegments(); renderPending(); updateSelectionFields(); updatePlaybackUI();
 }
 function renderPending() {
@@ -112,7 +114,30 @@ function renderPending() {
     remove.addEventListener('click', () => { pause(); pendingDeletions.splice(index, 1); clearNotice(); render(); });
     li.append(number, times, duration, remove); $('pending-list').append(li);
   });
-  $('pending-summary').textContent = `共 ${formatTime(seconds(totalFrames(pendingDeletions)))} · 刪除後長度 ${formatTime(seconds(totalFrames(outputRanges())))}`;
+  $('pending-summary').textContent = `共 ${formatTime(seconds(totalFrames(normalizedPending())))} · 刪除後長度 ${formatTime(seconds(totalFrames(outputRanges())))}`;
+}
+function editPendingRange(index, value, phase) {
+  if (!engine.buffer) return;
+  if (phase === 'start') {
+    if (!pendingDeletions[index]) return;
+    pendingEdit = { index, original:structuredClone(pendingDeletions), selection:[...selection] };
+    pause(); selection = [...value]; updateSelectionFields();
+  } else if (pendingEdit?.index === index) {
+    if (phase === 'update') {
+      pendingDeletions[index] = [...value]; selection = [...value]; revokeDownload();
+      // Keep the dragged interval's index stable until release, even when edges overlap.
+      render({ normalizeQueue:false });
+    } else {
+      if (phase === 'cancel') { pendingDeletions = pendingEdit.original; selection = pendingEdit.selection; }
+      else {
+        pendingDeletions = normalizedPending();
+        const merged = pendingDeletions.find(([a, b]) => a <= selection[0] && b >= selection[1]);
+        if (merged) selection = [...merged];
+      }
+      pendingEdit = null; render();
+      if (phase === 'end') notify('已更新待刪段落的起點與終點，可繼續調整或直接匯出。');
+    }
+  }
 }
 function addPendingSelection(fromWave = false) {
   if (!engine.buffer || (!fromWave && !applyTimeFields())) return;
@@ -187,6 +212,7 @@ async function acceptBuffer(buffer, name, bytes, token) {
   render();
 }
 function beginLoading() {
+  wave.cancelDrag(); pendingEdit = null;
   pause(); cancelExport(false); revokeDownload(); clearNotice(); engine.release();
   history.reset([]); pendingDeletions = []; isLoading = true;
   $('workspace').hidden = true; $('import-area').hidden = true; $('features').hidden = true; $('loading').hidden = false;
@@ -330,6 +356,7 @@ document.querySelectorAll('[name="format"]').forEach(input => input.addEventList
 $('export-button').addEventListener('click', exportAudio);
 $('cancel-export').addEventListener('click', () => cancelExport());
 document.addEventListener('keydown', event => {
+  if (pendingEdit) { if (event.key === 'Escape') { event.preventDefault(); wave.cancelDrag(); } return; }
   if (!engine.buffer || isLoading || $('replace-dialog').open || event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
   const modified = event.ctrlKey || event.metaKey;
   if (modified && event.key.toLowerCase() === 'z') { event.preventDefault(); (event.shiftKey ? $('redo') : $('undo')).click(); }
