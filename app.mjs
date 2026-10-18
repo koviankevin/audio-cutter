@@ -6,6 +6,7 @@ const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
 const setAttribute = (element, name, value) => { if (element.getAttribute(name) !== value) element.setAttribute(name, value); };
 const engine = new AudioEngine();
+engine.onError = error => { pause(); notify(error.message || '音訊讀取失敗，請重新選入音檔。', true); };
 const history = new History({ ranges:[], pending:[], selection:[0,0], cursor:0 });
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
@@ -254,7 +255,7 @@ async function startPlayback(parts = outputRanges(), from = cursor, junction = n
     await engine.play(parts, from, { loop });
     if (request !== playingRequest) return;
     tick();
-  } catch { if (request === playingRequest) { pause(); notify('無法播放音檔，請確認瀏覽器允許播放音訊。', true); } }
+  } catch (error) { if (request === playingRequest) { pause(); notify(error.userFacing ? error.message : '無法播放音檔，請確認瀏覽器允許播放音訊。', true); } }
 }
 function previewCurrentJunction({ loop = false } = {}) {
   if (!engine.buffer || wave.drag) return;
@@ -298,13 +299,13 @@ async function confirmReplacement() {
   return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'replace'), { once: true }));
 }
 async function acceptBuffer(buffer, name, bytes, token) {
-  if (token !== loadToken) return;
+  if (token !== loadToken) { buffer.dispose?.(); return; }
   if (![1, 2].includes(buffer.numberOfChannels)) throw new Error('第一版支援單聲道與雙聲道，請先將多聲道音訊轉為立體聲。');
   if (!buffer.length || buffer.duration > MAX_SECONDS + .01) throw new Error('請選擇 30 分鐘以內且包含音訊的檔案。');
   $('loading-title').textContent = '正在繪製聲音的輪廓';
-  const peaks = await makePeaks(buffer, progress => { if (token === loadToken) $('loading-detail').textContent = `波形準備中 ${Math.round(progress * 100)}%`; });
-  if (token !== loadToken) return;
-  engine.buffer = buffer; fileName = name; cursor = 0; selection = [0, buffer.length];
+  const peaks = buffer.peaks || await makePeaks(buffer, progress => { if (token === loadToken) $('loading-detail').textContent = `波形準備中 ${Math.round(progress * 100)}%`; });
+  if (token !== loadToken) { buffer.dispose?.(); return; }
+  engine.buffer = buffer; engine.loadingSource = null; fileName = name; cursor = 0; selection = [0, buffer.length];
   keptRanges = [[0, buffer.length]]; pendingDeletions = [];
   history.reset(captureState()); savedSignature = signature(ranges());
   $('file-name').textContent = name;
@@ -340,13 +341,16 @@ async function importFile(file) {
   try {
     const duration = await readDuration(file);
     if (token !== loadToken) return;
-    if (duration > MAX_SECONDS + .01) throw new Error('請選擇 30 分鐘以內且包含音訊的檔案。');
-    const buffer = await engine.decode(file);
+    // VBR MP3 metadata may be estimated; its worker enforces the decoded sample limit.
+    if (!/\.mp3$/i.test(file.name) && duration > MAX_SECONDS + .01) throw new Error('請選擇 30 分鐘以內且包含音訊的檔案。');
+    const buffer = await engine.decode(file, { duration, onProgress(progress, phase) {
+      if (token === loadToken) { $('loading-title').textContent = phase; $('loading-detail').textContent = `${Math.round(progress * 100)}% · 音檔只在此裝置處理，可隨時取消。`; }
+    } });
     await acceptBuffer(buffer, file.name, file.size, token);
   } catch (error) {
     if (token !== loadToken) return;
-    isLoading = false; returnToImport();
-    notify(error.message.includes('第一版') || error.message.includes('30 分鐘') ? error.message : '無法讀取這個音檔。可能已損毀、編碼不受支援，或裝置記憶體不足。請嘗試較短的 MP3 或 WAV。', true);
+    engine.release(); isLoading = false; returnToImport();
+    notify(error.userFacing ? `無法讀取音檔：${error.message}` : error.message.includes('第一版') || error.message.includes('30 分鐘') ? error.message : '無法讀取這個音檔。可能已損毀、編碼不受支援，或裝置記憶體不足。請嘗試較短的 MP3 或 WAV。', true);
   }
 }
 async function readDuration(file) {
@@ -393,14 +397,18 @@ function exportAudio() {
     if (exportJob !== job) return;
     cancelExport(false); notify(message || '匯出失敗，請重試或改用 WAV。', true);
   }
-  function pump() {
+  async function pump() {
     if (exportJob !== job) return;
     if (partIndex >= parts.length) { $('export-status').textContent = '正在完成檔案…'; worker.postMessage({ type: 'finish' }); return; }
-    const end = Math.min(parts[partIndex][1], frame + 73728);
-    const chunks = Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel).slice(frame, end).buffer);
-    worker.postMessage({ type: 'chunk', channels: chunks }, chunks);
-    frame = end;
-    if (frame >= parts[partIndex][1]) { partIndex++; frame = parts[partIndex]?.[0] ?? 0; }
+    try {
+      const end = Math.min(parts[partIndex][1], frame + 73728);
+      const data = buffer.readChannels ? await buffer.readChannels(frame, end) : Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel).slice(frame, end));
+      if (exportJob !== job) return;
+      const chunks = data.map(channel => channel.buffer);
+      worker.postMessage({ type: 'chunk', channels: chunks }, chunks);
+      frame = end;
+      if (frame >= parts[partIndex][1]) { partIndex++; frame = parts[partIndex]?.[0] ?? 0; }
+    } catch (error) { fail(error.userFacing ? error.message : '無法讀取匯出音訊，請重新選入音檔。'); }
   }
   worker.onmessage = ({ data }) => {
     if (exportJob !== job) return;

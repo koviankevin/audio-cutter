@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
 import { wavHeader } from '../pcm.mjs';
 import { subtractMany } from '../core.mjs';
+import { workerMemory } from './worker-memory.mjs';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright');
 const channel = process.env.BROWSER_CHANNEL || 'chrome', label = process.env.PERF_LABEL || 'current';
@@ -94,6 +95,9 @@ try {
     report.longImport={elapsedMs:Date.now()-start,decodedMiB:frames*channels*4/1024**2,...await page.evaluate(()=>window.audit.snapshot())};
     report.longImport.phases=await page.evaluate(()=>{const {readMs,decodeMs,channels}=window.importAudit;window.importAudit.restore();return {readMs,decodeMs,channelAccessMs:channels};});
     report.longImport.heap=await session.send('Runtime.getHeapUsage');
+    report.longImport.workerHeaps=await workerMemory(browser);
+    assert.ok(report.longImport.heap.backingStorageSize<32*1024**2,'long WAV PCM must stay off the page heap');
+    assert.ok(report.longImport.workerHeaps.every(heap=>heap.backingStorageSize<16*1024**2),'WAV worker must retain only bounded scratch buffers');
     if(process.env.PROFILE_IMPORT==='1'){const {profile}=await session.send('Profiler.stop');await writeFile(path.join(output,`${label}-import.cpuprofile`),JSON.stringify(profile));}
     await selected(10,20); await page.locator('#add-deletion').click(); report.longLoop=await samplePlayback('#loop-junction');
     await page.locator('#clear-deletions').click();
