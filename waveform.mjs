@@ -1,10 +1,10 @@
 import { deletedRanges, formatTime } from './core.mjs';
 
 export class Waveform {
-  constructor(canvas, onSelection, onSeek) {
+  constructor(canvas, onSelection, onSeek, onAddSelection = () => {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.onSelection = onSelection; this.onSeek = onSeek;
+    this.onSelection = onSelection; this.onSeek = onSeek; this.onAddSelection = onAddSelection;
     this.zoom = 1; this.scroll = 0; this.playhead = 0;
     this.observer = new ResizeObserver(() => this.draw()); this.observer.observe(canvas);
     canvas.addEventListener('pointerdown', event => this.pointerDown(event));
@@ -21,8 +21,8 @@ export class Waveform {
     this.length = buffer.length; this.sampleRate = buffer.sampleRate; this.peaks = peaks;
     this.zoom = 1; this.scroll = 0; this.playhead = 0;
   }
-  update(ranges, selection, playhead) {
-    this.ranges = ranges; this.selection = selection; this.playhead = playhead; this.draw();
+  update(ranges, selection, playhead, pending = []) {
+    this.ranges = ranges; this.selection = selection; this.playhead = playhead; this.pending = pending; this.draw();
   }
   get viewLength() { return this.length / this.zoom; }
   get viewStart() { return (this.length - this.viewLength) * this.scroll; }
@@ -38,8 +38,8 @@ export class Waveform {
     const x = event.clientX - this.canvas.getBoundingClientRect().left;
     const startDistance = Math.abs(this.frameToX(this.selection[0]) - x);
     const endDistance = Math.abs(this.frameToX(this.selection[1]) - x);
-    const handle = Math.min(startDistance, endDistance) < 11 ? (startDistance <= endDistance ? 'start' : 'end') : null;
-    this.drag = { frame, x: event.clientX, selection: [...this.selection], handle, moved: false };
+    const handle = !event.shiftKey && Math.min(startDistance, endDistance) < 11 ? (startDistance <= endDistance ? 'start' : 'end') : null;
+    this.drag = { frame, x: event.clientX, selection: [...this.selection], handle, moved: false, additive: event.shiftKey };
     this.canvas.setPointerCapture(event.pointerId);
   }
   pointerMove(event) {
@@ -55,6 +55,7 @@ export class Waveform {
   pointerUp(event) {
     if (!this.drag) return;
     if (!this.drag.moved) this.onSeek(this.xToFrame(event.clientX));
+    else if (this.drag.additive) this.onAddSelection();
     this.drag = null;
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
   }
@@ -107,6 +108,16 @@ export class Waveform {
       ctx.strokeStyle = '#c4cfc46b'; ctx.lineWidth = 1;
       for (let x = left - height; x < right; x += 9) { ctx.beginPath(); ctx.moveTo(x, bottom); ctx.lineTo(x + height, top); ctx.stroke(); }
       ctx.restore();
+    }
+    for (const [index, [a, b]] of (this.pending || []).entries()) {
+      const left = Math.max(0, xOf(a)), right = Math.min(width, xOf(b));
+      if (right <= left) continue;
+      ctx.fillStyle = '#dba0472d'; ctx.fillRect(left, top, right - left, bottom - top);
+      ctx.strokeStyle = '#bd914e'; ctx.lineWidth = 1; ctx.strokeRect(left + .5, top + .5, right - left - 1, bottom - top - 1);
+      if (right - left > 45) {
+        ctx.fillStyle = '#95692a'; ctx.font = '9px "Segoe UI", sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(`待刪 ${String(index + 1).padStart(2, '0')}`, left + 6, top + 11);
+      }
     }
     if (selectedEnd > selectedStart) {
       ctx.strokeStyle = '#81a984'; ctx.lineWidth = 1; ctx.strokeRect(selectedStart + .5, top + .5, selectedEnd - selectedStart - 1, bottom - top - 1);

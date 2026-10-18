@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalize, subtract, intersect, deletedRanges, totalFrames, frameAtOffset, parseTime, formatTime, History } from '../core.mjs';
+import { normalize, subtract, subtractMany, intersect, deletedRanges, totalFrames, frameAtOffset, parseTime, formatTime, History } from '../core.mjs';
 import { floatToInt16, interleavePCM, wavHeader } from '../pcm.mjs';
 
 test('trimming head/tail and deleting a middle section keep chronological intervals', () => {
@@ -20,6 +20,29 @@ test('selection crossing deleted gaps never resurrects deleted samples', () => {
   assert.deepEqual(subtract(parts,[10,10]), parts);
   assert.deepEqual(subtract(parts,[0,100]), []);
   assert.deepEqual(intersect(parts,[20,40]), []);
+});
+
+test('bulk deletion merges unordered overlapping and duplicate ranges without double counting', () => {
+  const original = [[0,100]];
+  const removals = [[60,80],[20,35],[30,40],[20,35],[40,45]];
+  const result = subtractMany(original, removals);
+  assert.deepEqual(result, [[0,20],[45,60],[80,100]]);
+  assert.equal(totalFrames(result),55);
+  assert.deepEqual(original, [[0,100]]);
+  assert.deepEqual(removals, [[60,80],[20,35],[30,40],[20,35],[40,45]]);
+  assert.deepEqual(subtractMany([[0,20],[40,60],[80,100]], [[10,50],[55,90]]), [[0,10],[50,55],[90,100]]);
+  assert.deepEqual(subtractMany(original, [[0,100]]), []);
+  assert.deepEqual(subtractMany(original, []), original);
+  assert.deepEqual(subtractMany([], [[0,100]]), []);
+});
+
+test('bulk deletion is one undoable operation including sample boundaries', () => {
+  const history = new History([[0,441000]]);
+  history.commit(subtractMany(history.current, [[88200,176400],[264600,352800]]));
+  assert.deepEqual(history.current, [[0,88200],[176400,264600],[352800,441000]]);
+  assert.deepEqual(history.undo(), [[0,441000]]);
+  assert.equal(history.canUndo, false);
+  assert.deepEqual(history.redo(), [[0,88200],[176400,264600],[352800,441000]]);
 });
 test('normalization and playback offset mapping respect exact sample boundaries', () => {
   assert.deepEqual(normalize([[10,20],[0,10],[30,120],[-3,2],[NaN,2]],100), [[0,20],[30,100]]);

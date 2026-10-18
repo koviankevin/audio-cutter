@@ -89,8 +89,28 @@ try {
   await page.locator('#file-input').setInputFiles(source);
   await page.locator('#workspace').waitFor({ state: 'visible', timeout: 20000 });
   assert.equal(await page.locator('#segment-count').textContent(),'1');
-  await select(2,4); await page.locator('#delete-selection').click();
-  await select(6,8); await page.locator('#delete-selection').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(3,4); await page.locator('#add-deletion').click();
+  assert.equal(await page.locator('#pending-count').textContent(),'1','overlapping ranges should merge');
+  await select(2,4); await page.locator('#add-deletion').click();
+  assert.equal(await page.locator('#pending-count').textContent(),'1','duplicate ranges should not add duration');
+  await select(5,6); await page.locator('#add-deletion').click();
+  await page.getByRole('button',{name:'移除待刪段落 2',exact:true}).click();
+  assert.equal(await page.locator('#pending-count').textContent(),'1');
+  await select(6,8); await page.locator('#add-deletion').click();
+  assert.equal(await page.locator('#pending-count').textContent(),'2');
+  assert.equal(await page.locator('#output-duration').textContent(),'00:08.000','show the projected export duration before applying the batch');
+  assert.equal(await page.locator('#segment-count').textContent(),'1','queued selections must not delete audio yet');
+  assert.equal(await page.locator('#undo').isDisabled(),true,'queueing is separate from committing an audio edit');
+  assert.match(await page.locator('#pending-summary').textContent(),/00:04.000.*00:08.000/);
+  await page.locator('#preview-deletions').click(); await page.waitForTimeout(100); await page.locator('#toggle-play').click();
+  await page.screenshot({path:path.join(output,'04-multi-selection.png'),fullPage:true});
+  await page.locator('#apply-deletions').click();
+  assert.equal(await page.locator('#pending-panel').isVisible(),false);
+  assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
+  await page.locator('#undo').click();
+  assert.equal(await page.locator('#output-duration').textContent(),'00:12.000','one undo must restore the entire batch');
+  await page.locator('#redo').click();
   assert.equal(await page.locator('#segment-count').textContent(),'3');
   assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
   await select(1,10); await page.locator('#keep-selection').click();
@@ -120,7 +140,12 @@ try {
   await page.locator('#waveform').focus(); await page.keyboard.press('Space'); await page.waitForTimeout(80); await page.keyboard.press('Space');
   assert.equal(await page.locator('#toggle-play').getAttribute('aria-label'),'播放');
   await page.screenshot({ path: path.join(output, '02-editor.png'), fullPage: true });
+  await page.locator('#reset').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
+  assert.match(await page.locator('#export-button').textContent(),/刪除清單並匯出/);
   const wav = await exportFile('wav'); const wavInfo = await decodeInfo(wav);
+  assert.equal(await page.locator('#pending-panel').isVisible(),false);
   assert.equal(wavInfo.duration,8); assert.equal(wavInfo.channels,2); assert.equal(wavInfo.rate,44100);
   for (const tone of wavInfo.tones) {
     assert.ok(tone.left > .3, 'WAV left tone');
@@ -135,6 +160,9 @@ try {
       for (let channel = 0; channel < 2; channel++) assert.ok(Math.abs(original.readInt16LE(44+frame*4+channel*2) - result.readInt16LE(44+outputFrame*4+channel*2)) <= 1);
     }
   }
+  await page.locator('#reset').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
   const mp3 = await exportFile('mp3'); const mp3Info = await decodeInfo(mp3);
   console.log('WAV sample boundaries and MP3 export verified');
   assert.ok(Math.abs(mp3Info.duration - 8) < .12); assert.equal(mp3Info.channels,2);
@@ -178,8 +206,28 @@ try {
   assert.match(await page.locator('#notice').textContent(),/無法讀取/);
   await page.locator('#load-demo').click(); await page.locator('#workspace').waitFor({ state:'visible' });
   assert.equal(await page.locator('#original-duration').textContent(),'00:18.000');
+  const demoBounds = await page.locator('#waveform').boundingBox();
+  await page.keyboard.down('Shift');
+  for (const [start,end] of [[.1,.2],[.5,.6]]) {
+    await page.mouse.move(demoBounds.x+demoBounds.width*start,demoBounds.y+80);
+    await page.mouse.down(); await page.mouse.move(demoBounds.x+demoBounds.width*end,demoBounds.y+80,{steps:8}); await page.mouse.up();
+  }
+  await page.keyboard.up('Shift');
+  assert.equal(await page.locator('#pending-count').textContent(),'2','Shift drag should collect multiple selections');
+  await page.locator('#file-input').setInputFiles(source);
+  await page.locator('#replace-dialog').waitFor({state:'visible'});
+  await page.locator('#replace-dialog button[value="cancel"]').click();
+  assert.equal(await page.locator('#original-duration').textContent(),'00:18.000','queued edits must be protected on replacement');
   await page.setViewportSize({ width:390,height:844 }); await page.screenshot({ path:path.join(output,'03-mobile.png'),fullPage:true });
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth),false,'mobile must not overflow');
+  await page.locator('#clear-deletions').click();
+  assert.equal(await page.locator('#pending-panel').isVisible(),false);
+  await select(0,18); await page.locator('#add-deletion').click();
+  assert.equal(await page.locator('#export-button').isDisabled(),true,'do not export an empty projected result');
+  await page.locator('#apply-deletions').click();
+  assert.equal(await page.locator('#empty-segments').isVisible(),true);
+  await page.locator('#undo').click();
+  assert.equal(await page.locator('#output-duration').textContent(),'00:18.000');
   if (process.env.LONG_AUDIO === '1') {
     const long = await fixture(29*60,1,'29-minutes.wav');
     const started = Date.now();
@@ -201,7 +249,7 @@ try {
   const appRequests = requests.filter(request=>!environmentRequests.includes(request));
   await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
   assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
-  console.log(`PASS ${channel || 'chromium'}: editing, history, selection, WAV exact samples, MP3 stereo, playback, cancellation, invalid files, responsive layout, subpath, local-only network.`);
+  console.log(`PASS ${channel || 'chromium'}: bulk selections, overlap/duplicates, Shift drag, one-step delete and export, atomic undo, WAV exact samples, MP3 stereo, playback, cancellation, invalid files, responsive layout, subpath, local-only network.`);
 } finally {
   await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
 }

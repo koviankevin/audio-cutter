@@ -47,6 +47,11 @@ export function deletedRanges(ranges, length) {
   return result;
 }
 
+export function subtractMany(ranges, removals) {
+  const length = ranges.at(-1)?.[1] ?? 0;
+  return normalize(removals, length).reduce((kept, removal) => subtract(kept, removal), ranges.map(range => [...range]));
+}
+
 export function frameAtOffset(ranges, offset) {
   for (const [a, b] of ranges) {
     if (offset < b - a) return a + Math.max(0, offset);

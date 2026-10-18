@@ -1,4 +1,4 @@
-import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, subtract, intersect, formatTime, parseTime } from './core.mjs';
+import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, formatTime, parseTime } from './core.mjs';
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 
@@ -7,8 +7,10 @@ const engine = new AudioEngine();
 const history = new History([]);
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
-const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value));
+let pendingDeletions = [];
+const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true));
 const ranges = () => history.current;
+const outputRanges = () => subtractMany(ranges(), pendingDeletions);
 const dirty = () => !!engine.buffer && signature(ranges()) !== savedSignature;
 const seconds = frames => frames / (engine.buffer?.sampleRate || SAMPLE_RATE);
 
@@ -23,22 +25,27 @@ function revokeDownload() {
 function updateButtons() {
   const loaded = !!engine.buffer && !isLoading;
   const hasAudio = loaded && totalFrames(ranges()) > 0;
+  const hasOutput = loaded && totalFrames(outputRanges()) > 0;
   const validSelection = loaded && selection[1] > selection[0];
   $('undo').disabled = !loaded || !history.canUndo; $('redo').disabled = !loaded || !history.canRedo;
-  $('reset').disabled = !loaded || signature(ranges()) === signature([[0, engine.buffer?.length]]);
-  $('toggle-play').disabled = !hasAudio; $('preview-result').disabled = !hasAudio;
+  $('reset').disabled = !loaded || (!pendingDeletions.length && signature(ranges()) === signature([[0, engine.buffer?.length]]));
+  $('toggle-play').disabled = !hasOutput; $('preview-result').disabled = !hasOutput;
   $('preview-selection').disabled = !validSelection || !totalFrames(intersect(ranges(), selection));
   $('delete-selection').disabled = !validSelection || !totalFrames(intersect(ranges(), selection));
   $('keep-selection').disabled = !validSelection || !totalFrames(intersect(ranges(), selection));
-  $('export-button').disabled = !hasAudio || !!exportJob;
-  $('edit-indicator').textContent = dirty() ? '尚未匯出' : (history.canUndo ? '已匯出' : '原始音檔');
+  $('add-deletion').disabled = !validSelection || !totalFrames(intersect(ranges(), selection));
+  $('apply-deletions').disabled = !loaded || !pendingDeletions.length;
+  $('preview-deletions').disabled = !hasOutput || !pendingDeletions.length;
+  $('export-button').disabled = !hasAudio || !!exportJob || !hasOutput;
+  $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔'}`;
+  $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : (history.canUndo ? '已匯出' : '原始音檔');
 }
 function updateSelectionFields() {
   $('selection-start').value = formatTime(seconds(selection[0]));
   $('selection-end').value = formatTime(seconds(selection[1]));
   $('selection-start').removeAttribute('aria-invalid'); $('selection-end').removeAttribute('aria-invalid');
   $('selection-duration').textContent = `${seconds(selection[1] - selection[0]).toFixed(3)} 秒`;
-  updateButtons(); wave.update(ranges(), selection, cursor);
+  updateButtons(); wave.update(ranges(), selection, cursor, pendingDeletions);
 }
 function setSelection(value) {
   if (!engine.buffer) return;
@@ -76,13 +83,50 @@ function renderSegments() {
 }
 function render() {
   if (!engine.buffer) return;
-  const outputTime = formatTime(seconds(totalFrames(ranges())));
+  pendingDeletions = normalize(pendingDeletions.flatMap(part => intersect(ranges(), part)), engine.buffer.length);
+  const outputTime = formatTime(seconds(totalFrames(outputRanges())));
   const [base, millis] = outputTime.split('.');
   $('output-duration').replaceChildren(document.createTextNode(base));
   const tail = document.createElement('span'); tail.textContent = `.${millis}`; $('output-duration').append(tail);
   const removed = engine.buffer.length - totalFrames(ranges());
-  $('trim-summary').textContent = removed ? `已剪去 ${formatTime(seconds(removed))} · ${ranges().length} 個保留片段` : '尚未刪除任何段落';
-  renderSegments(); updateSelectionFields(); updatePlaybackUI();
+  $('output-duration').previousElementSibling.textContent = pendingDeletions.length ? '預計匯出長度' : '剪輯後長度';
+  $('trim-summary').textContent = pendingDeletions.length ? `待套用 ${pendingDeletions.length} 段 · 共 ${formatTime(seconds(totalFrames(pendingDeletions)))}` : removed ? `已剪去 ${formatTime(seconds(removed))} · ${ranges().length} 個保留片段` : '尚未刪除任何段落';
+  renderSegments(); renderPending(); updateSelectionFields(); updatePlaybackUI();
+}
+function renderPending() {
+  $('pending-panel').hidden = !pendingDeletions.length;
+  $('pending-legend').hidden = !pendingDeletions.length;
+  $('pending-count').textContent = pendingDeletions.length;
+  $('pending-list').replaceChildren();
+  pendingDeletions.forEach(([a, b], index) => {
+    const li = document.createElement('li');
+    const number = document.createElement('span'); number.textContent = String(index + 1).padStart(2, '0');
+    const times = document.createElement('button'); times.type = 'button'; times.className = 'text-button pending-time';
+    times.textContent = `${formatTime(seconds(a))} — ${formatTime(seconds(b))}`;
+    times.setAttribute('aria-label', `選取待刪段落 ${index + 1}`);
+    times.addEventListener('click', () => { setSelection([a, b]); $('waveform').focus({ preventScroll:true }); });
+    const duration = document.createElement('span'); duration.textContent = `${seconds(b - a).toFixed(3)} 秒`;
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'icon-button';
+    remove.setAttribute('aria-label', `移除待刪段落 ${index + 1}`); remove.title = '從待刪清單移除，保留這段音訊';
+    remove.innerHTML = '<svg aria-hidden="true"><use href="#i-close"/></svg>';
+    remove.addEventListener('click', () => { pause(); pendingDeletions.splice(index, 1); clearNotice(); render(); });
+    li.append(number, times, duration, remove); $('pending-list').append(li);
+  });
+  $('pending-summary').textContent = `共 ${formatTime(seconds(totalFrames(pendingDeletions)))} · 刪除後長度 ${formatTime(seconds(totalFrames(outputRanges())))}`;
+}
+function addPendingSelection(fromWave = false) {
+  if (!engine.buffer || (!fromWave && !applyTimeFields())) return;
+  const next = normalize([...pendingDeletions, ...intersect(ranges(), selection)], engine.buffer.length);
+  if (signature(next) === signature(pendingDeletions)) { notify('這個範圍已在清單內，或沒有可刪除的音訊。'); return; }
+  pause(); pendingDeletions = next; revokeDownload(); render();
+  notify(`已加入待刪清單，共 ${pendingDeletions.length} 段。可繼續選段，完成後一次刪除或直接匯出。`);
+}
+function applyPendingDeletions() {
+  if (!engine.buffer || !pendingDeletions.length) return;
+  const count = pendingDeletions.length;
+  const next = subtractMany(ranges(), pendingDeletions);
+  pendingDeletions = []; commit(next);
+  notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
 function pause() {
   playingRequest++; cursor = engine.pause(); cancelAnimationFrame(animation); updatePlaybackUI();
@@ -91,9 +135,9 @@ function updatePlaybackUI() {
   $('toggle-play').setAttribute('aria-label', engine.playing ? '暫停' : '播放');
   $('toggle-play').querySelector('use').setAttribute('href', engine.playing ? '#i-pause' : '#i-play');
   $('playhead-time').textContent = formatTime(seconds(cursor));
-  wave.update(ranges(), selection, cursor);
+  wave.update(ranges(), selection, cursor, pendingDeletions);
 }
-async function startPlayback(parts = ranges(), from = cursor) {
+async function startPlayback(parts = outputRanges(), from = cursor) {
   if (!engine.buffer || !parts.length) return;
   pause(); const request = ++playingRequest;
   try {
@@ -119,7 +163,7 @@ function edit(kind) {
 }
 
 async function confirmReplacement() {
-  if (!dirty()) return true;
+  if (!dirty() && !pendingDeletions.length) return true;
   const dialog = $('replace-dialog'); dialog.returnValue = 'cancel'; dialog.showModal();
   return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'replace'), { once: true }));
 }
@@ -144,7 +188,7 @@ async function acceptBuffer(buffer, name, bytes, token) {
 }
 function beginLoading() {
   pause(); cancelExport(false); revokeDownload(); clearNotice(); engine.release();
-  history.reset([]); isLoading = true;
+  history.reset([]); pendingDeletions = []; isLoading = true;
   $('workspace').hidden = true; $('import-area').hidden = true; $('features').hidden = true; $('loading').hidden = false;
   $('loading-title').textContent = '正在讀取音檔'; $('loading-detail').textContent = '正在解碼，請稍候。音檔不會上傳。';
   return ++loadToken;
@@ -197,6 +241,8 @@ function cancelExport(showNotice = true) {
 }
 function exportAudio() {
   if (!engine.buffer || !totalFrames(ranges()) || exportJob) return;
+  if (pendingDeletions.length) applyPendingDeletions();
+  if (!totalFrames(ranges())) return;
   clearNotice(); revokeDownload();
   const format = document.querySelector('[name="format"]:checked').value;
   const parts = structuredClone(ranges());
@@ -263,12 +309,16 @@ for (const id of ['selection-start', 'selection-end']) {
   $(id).addEventListener('keydown', event => { if (event.key === 'Enter') { applyTimeFields(); event.target.blur(); } });
 }
 $('delete-selection').addEventListener('click', () => edit('delete'));
+$('add-deletion').addEventListener('click', () => addPendingSelection());
+$('apply-deletions').addEventListener('click', applyPendingDeletions);
+$('clear-deletions').addEventListener('click', () => { pause(); pendingDeletions = []; clearNotice(); render(); });
+$('preview-deletions').addEventListener('click', () => startPlayback(outputRanges(), 0));
 $('keep-selection').addEventListener('click', () => edit('keep'));
 $('undo').addEventListener('click', () => { pause(); history.undo(); revokeDownload(); clearNotice(); render(); });
 $('redo').addEventListener('click', () => { pause(); history.redo(); revokeDownload(); clearNotice(); render(); });
-$('reset').addEventListener('click', () => { commit([[0, engine.buffer.length]]); setSelection([0, engine.buffer.length]); });
+$('reset').addEventListener('click', () => { pendingDeletions = []; commit([[0, engine.buffer.length]]); setSelection([0, engine.buffer.length]); render(); });
 $('toggle-play').addEventListener('click', () => engine.playing ? pause() : startPlayback());
-$('preview-result').addEventListener('click', () => startPlayback(ranges(), 0));
+$('preview-result').addEventListener('click', () => startPlayback(outputRanges(), 0));
 $('preview-selection').addEventListener('click', () => { if (applyTimeFields()) startPlayback(intersect(ranges(), selection), selection[0]); });
 $('zoom').addEventListener('input', event => {
   wave.zoom = Number(event.target.value); $('zoom-value').textContent = `${wave.zoom}×`; $('scroll-label').hidden = wave.zoom === 1; wave.draw();
@@ -287,7 +337,7 @@ document.addEventListener('keydown', event => {
   else if (event.code === 'Space' && !event.target.closest('button,a')) { event.preventDefault(); $('toggle-play').click(); }
   else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); $('delete-selection').click(); }
 });
-window.addEventListener('beforeunload', event => { if (dirty() || exportJob) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (dirty() || pendingDeletions.length || exportJob) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('pagehide', event => { cancelExport(false); pause(); if (!event.persisted) { revokeDownload(); engine.release(); engine.context?.close(); } });
 
 // Render is entirely local: no analytics, fetch of audio, or account is required.
