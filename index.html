@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#167d72">
+  <meta name="description" content="音剪：在瀏覽器內快速剪輯音檔，預聽多段剪輯結果並匯出 MP3 或 WAV。音檔不離開你的裝置。">
+  <title>音剪 — 留下想聽的部分</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.mjs"></script>
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="5" cy="6" r="3"/><circle cx="5" cy="18" r="3"/><path d="m7.5 7.5 13 13M7.5 16.5 21 3M14 10l7-7"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="m8 4-5 5 5 5M3 9h11a7 7 0 0 1 0 14"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m16 4 5 5-5 5m5-5H10a7 7 0 0 0 0 14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM8 12l3 3 5-6"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13M9 8l12-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="18" cy="16" rx="3" ry="2"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 1 7M3 3v7h7"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  </defs></svg>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="音剪首頁"><span class="brand-mark"><svg><use href="#i-scissors"/></svg></span><strong>音剪<span class="brand-dot">.</span></strong><span class="brand-en">AUDIO CUTTER</span></a>
+      <div class="header-right"><span class="local-badge"><span></span> 在你的裝置上處理</span><a href="https://github.com/koviankevin/audio-cutter" target="_blank" rel="noopener noreferrer" class="source-link">GitHub <span aria-hidden="true">↗</span></a></div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <div class="eyebrow"><span></span> LESS NOISE. MORE OF WHAT MATTERS.</div>
+        <h1>留下<span>想聽的</span>部分。</h1>
+        <p>一段錄音，幾個俐落的剪輯。<br class="mobile-break">把想要的聲音，變成剛剛好的長度。</p>
+        <div class="intro-meta"><span>01 選入音檔</span><i>→</i><span>02 選段剪輯</span><i>→</i><span>03 匯出下載</span></div>
+      </section>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <section id="import-area" class="import-area" aria-label="匯入音檔">
+        <div class="drop-lines" aria-hidden="true"></div>
+        <div class="upload-icon"><svg><use href="#i-upload"/></svg></div>
+        <h2>把音檔拖到這裡</h2>
+        <p>或從電腦選擇一個檔案，開始你的剪輯</p>
+        <button id="choose-file" class="button primary"><svg><use href="#i-upload"/></svg> 選擇音檔</button>
+        <input id="file-input" type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav" hidden>
+        <div class="upload-meta">MP3 / WAV <span>·</span> 最長 30 分鐘 <span>·</span> 最大 400 MB</div>
+        <button id="load-demo" class="text-button demo-button"><svg><use href="#i-play"/></svg> 先用示範音檔試試</button>
+      </section>
+
+      <section id="loading" class="loading card" aria-label="音檔載入中" hidden>
+        <div class="spinner"></div><h2 id="loading-title">正在讀取音檔</h2><p id="loading-detail">正在解碼，請稍候。音檔不會上傳。</p><button id="cancel-load" class="button subtle">取消載入</button>
+      </section>
+
+      <section id="workspace" class="workspace" aria-label="音檔剪輯工作區" hidden>
+        <div class="editor-column">
+          <section class="card editor">
+            <div class="file-header"><div class="file-info"><span class="file-icon"><svg><use href="#i-music"/></svg></span><div><h2 id="file-name"></h2><p id="file-meta"></p></div></div><button id="replace-file" class="button small subtle">更換音檔</button></div>
+            <div class="editor-toolbar"><span class="section-label">音訊波形 <span id="edit-indicator" class="edit-indicator">原始音檔</span></span><div class="history-tools"><button id="undo" class="icon-button" aria-label="復原" title="復原 Ctrl+Z"><svg><use href="#i-undo"/></svg></button><button id="redo" class="icon-button" aria-label="重做" title="重做 Ctrl+Shift+Z"><svg><use href="#i-redo"/></svg></button><span></span><button id="reset" class="text-button" title="還原所有剪輯"><svg><use href="#i-reset"/></svg>還原</button></div></div>
+            <div class="wave-wrap"><canvas id="waveform" tabindex="0" aria-label="音訊波形，可拖曳選取區間；也可使用下方時間欄位選段。左右方向鍵移動播放位置。"></canvas></div>
+            <div class="wave-navigation"><span class="wave-legend"><i class="kept-dot"></i>保留 <i class="removed-dot"></i>已刪除</span><label class="zoom-label">縮放 <input id="zoom" type="range" min="1" max="64" step="1" value="1" aria-label="波形縮放"><output id="zoom-value">1×</output></label></div>
+            <label id="scroll-label" class="scroll-label" hidden><span>波形位置</span><input id="wave-scroll" type="range" min="0" max="1000" value="0" aria-label="波形水平位置"></label>
+            <div class="transport"><div class="transport-primary"><button id="toggle-play" class="play-button" aria-label="播放或暫停"><svg><use href="#i-play"/></svg></button><div class="time-display"><strong id="playhead-time">00:00.000</strong><span>/ <span id="original-duration">00:00.000</span></span></div></div><button id="preview-result" class="button subtle small"><svg><use href="#i-play"/></svg>預聽剪輯結果</button></div>
+            <div class="selection-panel"><div class="selection-heading"><span class="section-label">選取範圍</span><span id="selection-duration">0.000 秒</span></div><div class="selection-times"><label>起點<input id="selection-start" type="text" value="00:00.000" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="time-hint"></label><span class="time-arrow" aria-hidden="true">→</span><label>終點<input id="selection-end" type="text" value="00:00.000" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="time-hint"></label><button id="preview-selection" class="icon-button selection-play" aria-label="播放選取範圍" title="播放選取範圍"><svg><use href="#i-play"/></svg></button></div><p id="time-hint" class="sr-only">輸入分:秒.毫秒，例如 01:23.456，或直接輸入秒數。按 Enter 套用。</p><div class="edit-actions"><button id="delete-selection" class="button danger-soft"><svg><use href="#i-scissors"/></svg>刪除選段</button><button id="keep-selection" class="button subtle"><svg><use href="#i-check"/></svg>只保留選段</button><span>拖曳波形選段，也可以直接輸入時間</span></div></div>
+          </section>
+          <section class="card segments-card"><div class="segments-heading"><h2>保留的片段 <span id="segment-count">1</span></h2><span>依原始順序接起來</span></div><ol id="segment-list" class="segment-list"></ol><p id="empty-segments" class="empty-segments" hidden>目前沒有保留片段，按「復原」即可找回聲音。</p></section>
+          <div class="keyboard-hints"><span><kbd>Space</kbd> 播放 / 暫停</span><span><kbd>Delete</kbd> 刪除選段</span><span><kbd>Ctrl</kbd> + <kbd>Z</kbd> 復原</span></div>
+        </div>
+
+        <aside class="card export-card" aria-label="匯出設定"><div class="export-heading"><span class="section-kicker">READY WHEN YOU ARE</span><h2>讓聲音，剛剛好。</h2><p>剪好了，就帶走吧。</p></div><div class="duration-summary"><span>剪輯後長度</span><strong id="output-duration">00:00<span>.000</span></strong><p id="trim-summary">尚未刪除任何段落</p></div><label class="field-label" for="export-name">檔案名稱</label><input id="export-name" type="text" maxlength="120" autocomplete="off" value="我的剪輯"><span class="field-label format-label">匯出格式</span><fieldset class="format-options"><legend class="sr-only">匯出格式</legend><label><input type="radio" name="format" value="mp3" checked><span><strong>MP3</strong><small>輕巧，方便分享</small></span><i></i></label><label><input type="radio" name="format" value="wav"><span><strong>WAV</strong><small>未壓縮 PCM</small></span><i></i></label></fieldset><p id="format-detail" class="format-detail">192 kbps · 44.1 kHz</p><button id="export-button" class="button primary export-button"><svg><use href="#i-download"/></svg>匯出音檔</button><div id="export-progress" class="export-progress" hidden><div><span id="export-status">正在匯出…</span><button id="cancel-export" class="text-button">取消</button></div><progress id="progress-bar" max="100" value="0" aria-label="匯出進度"></progress></div><a id="download-link" class="download-again" hidden>下載完成的音檔 <span>↓</span></a><div class="privacy-note"><svg><use href="#i-shield"/></svg><p>音檔只在你的瀏覽器內處理，<br>不會上傳到任何伺服器。</p></div></aside>
+      </section>
+
+      <section id="features" class="features" aria-label="工具特色"><div><span class="feature-number">01 /</span><h3>俐落選段，輕鬆剪輯</h3><p>看著波形，找到想保留的聲音。<br>多餘的停頓，一剪就好。</p></div><div><span class="feature-number">02 /</span><h3>你的音檔，由你掌握</h3><p>所有處理都在裝置上完成。<br>不需上傳，也不必註冊。</p></div><div><span class="feature-number">03 /</span><h3>想怎麼分享，都可以</h3><p>MP3 輕巧好分享，WAV 未壓縮。<br>選好格式，即可下載。</p></div></section>
+    </main>
+    <footer><span>音剪 <span class="footer-slash">/</span> 留下聲音，也留一點餘裕。</span><span>MADE FOR THE GOOD PARTS.</span></footer>
+  </div>
+  <dialog id="replace-dialog"><form method="dialog"><span class="section-kicker">開始新的剪輯</span><h2>還有尚未匯出的修改</h2><p>更換音檔後，目前的剪輯將會清除。<br>你可以先取消，匯出後再繼續。</p><div class="dialog-actions"><button class="button subtle" value="cancel">保留目前剪輯</button><button class="button primary" value="replace">更換音檔</button></div></form></dialog>
+</body>
+</html>

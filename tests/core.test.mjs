@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { normalize, subtract, intersect, deletedRanges, totalFrames, frameAtOffset, parseTime, formatTime, History } from '../core.mjs';
+import { floatToInt16, interleavePCM, wavHeader } from '../pcm.mjs';
+
+test('trimming head/tail and deleting a middle section keep chronological intervals', () => {
+  assert.deepEqual(intersect([[0,100]], [20,80]), [[20,80]]);
+  assert.deepEqual(subtract([[0,100]], [20,40]), [[0,20],[40,100]]);
+  const edited = subtract(subtract([[0,100]], [20,40]), [60,80]);
+  assert.deepEqual(edited, [[0,20],[40,60],[80,100]]);
+  assert.equal(totalFrames(edited), 60);
+  assert.deepEqual(intersect(edited,[10,90]), [[10,20],[40,60],[80,90]]);
+  assert.deepEqual(deletedRanges(edited,100), [[20,40],[60,80]]);
+});
+test('selection crossing deleted gaps never resurrects deleted samples', () => {
+  const parts = [[0,20],[40,60],[80,100]];
+  assert.deepEqual(intersect(parts,[15,85]), [[15,20],[40,60],[80,85]]);
+  assert.deepEqual(subtract(parts,[10,90]), [[0,10],[90,100]]);
+  assert.deepEqual(subtract(parts,[20,40]), parts);
+  assert.deepEqual(subtract(parts,[10,10]), parts);
+  assert.deepEqual(subtract(parts,[0,100]), []);
+  assert.deepEqual(intersect(parts,[20,40]), []);
+});
+test('normalization and playback offset mapping respect exact sample boundaries', () => {
+  assert.deepEqual(normalize([[10,20],[0,10],[30,120],[-3,2],[NaN,2]],100), [[0,20],[30,100]]);
+  assert.equal(frameAtOffset([[0,10],[30,40]],9),9);
+  assert.equal(frameAtOffset([[0,10],[30,40]],10),30);
+  assert.equal(frameAtOffset([[0,10],[30,40]],20),40);
+  assert.equal(frameAtOffset([],0),0);
+});
+test('undo/redo restores exact states, reset remains undoable and branching discards redo', () => {
+  const history = new History([[0,100]]);
+  history.commit([[10,90]]); history.commit([[10,20],[40,90]]);
+  assert.deepEqual(history.undo(),[[10,90]]);
+  assert.deepEqual(history.redo(),[[10,20],[40,90]]);
+  history.commit([[0,100]]); assert.deepEqual(history.undo(),[[10,20],[40,90]]);
+  history.commit([]); assert.equal(history.canRedo,false); assert.deepEqual(history.undo(),[[10,20],[40,90]]);
+  history.reset([[0,50]]); assert.equal(history.canUndo,false); assert.equal(history.canRedo,false);
+});
+test('time parsing accepts milliseconds and seconds but rejects malformed times', () => {
+  for (const [value,expected] of [['00:00.001',.001],['01:23.456',83.456],['29:59.999',1799.999],['2.5',2.5],['00:02.5',2.5]]) assert.equal(parseTime(value),expected);
+  for (const value of ['','abc','-1','00:60','1:2','1:02.1234']) assert.ok(Number.isNaN(parseTime(value)));
+  assert.equal(formatTime(59.9996),'01:00.000'); assert.equal(formatTime(1800),'30:00.000');
+});
+test('16-bit conversion clips cleanly and WAV interleaves stereo in little endian', () => {
+  assert.deepEqual([...floatToInt16(new Float32Array([-2,-1,0,1,2]))],[-32768,-32768,0,32767,32767]);
+  const body = interleavePCM([new Float32Array([1,-1]),new Float32Array([.5,-.5])]);
+  const view = new DataView(body.buffer);
+  assert.deepEqual([0,2,4,6].map(offset=>view.getInt16(offset,true)),[32767,16384,-32768,-16384]);
+  const header = wavHeader(2,2,44100); const info = new DataView(header.buffer);
+  assert.equal(new TextDecoder().decode(header.slice(0,4)),'RIFF');
+  assert.equal(info.getUint32(4,true),44); assert.equal(info.getUint16(22,true),2);
+  assert.equal(info.getUint32(24,true),44100); assert.equal(info.getUint32(40,true),8);
+  assert.throws(()=>wavHeader(0xffffffff,2,44100));
+});

@@ -1,0 +1,29 @@
+import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import path from 'node:path';
+
+export const publicFiles = ['index.html','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+export async function startServer({ port = 4173, base = '/' } = {}) {
+  const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8', '.svg':'image/svg+xml', '.txt':'text/plain; charset=utf-8', '.md':'text/plain; charset=utf-8' };
+  const server = http.createServer(async (req, res) => {
+    let pathname;
+    try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
+    catch { res.writeHead(400).end(); return; }
+    if (!pathname.startsWith(base)) { res.writeHead(404).end('Not found'); return; }
+    const name = pathname.slice(base.length) || 'index.html';
+    if (!publicFiles.includes(name)) { res.writeHead(404).end('Not found'); return; }
+    try {
+      const bytes = await readFile(path.join(root, name));
+      res.writeHead(200, { 'Content-Type': mime[path.extname(name)] || 'text/plain', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff' });
+      res.end(req.method === 'HEAD' ? undefined : bytes);
+    } catch { res.writeHead(404).end('Not found'); }
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  return { server, url: `http://127.0.0.1:${server.address().port}${base}` };
+}
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  const { url } = await startServer({ port: Number(process.env.PORT) || 4173 });
+  console.log(`音剪 Local: ${url}`);
+}

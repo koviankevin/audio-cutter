@@ -1,0 +1,207 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile, readFile, open } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { startServer } from '../scripts/serve.mjs';
+import { wavHeader } from '../pcm.mjs';
+
+const modulePath = process.env.PLAYWRIGHT_MODULE;
+const { chromium } = await import(modulePath ? pathToFileURL(modulePath).href : 'playwright');
+const channel = process.env.BROWSER_CHANNEL;
+const output = path.resolve('test-results', (channel || 'chromium') + (process.env.SITE_URL ? '-live' : ''));
+await mkdir(output, { recursive: true });
+const { server, url } = process.env.SITE_URL ? { server:null, url:process.env.SITE_URL } : await startServer({ port: 0, base: '/audio-cutter/' });
+const browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
+const context = await browser.newContext({ viewport: { width: 1440, height: 1080 }, acceptDownloads: true });
+const page = await context.newPage();
+const errors = [], requests = [], blocked = new Set();
+page.on('pageerror', error => errors.push(error.message));
+context.on('request', request => requests.push({ url: request.url(), method: request.method(), resource: request.resourceType() }));
+context.on('requestfailed', request => { if (/BLOCKED_BY_CSP/i.test(request.failure()?.errorText || '')) blocked.add(request.url()); });
+page.on('dialog', dialog => dialog.accept());
+
+async function waitFor(predicate, message) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); }
+  throw new Error(message);
+}
+async function select(start, end) {
+  await page.locator('#selection-start').fill(String(start));
+  await page.locator('#selection-end').fill(String(end));
+  await page.locator('#selection-end').press('Enter');
+}
+async function exportFile(format) {
+  await page.locator(`[name="format"][value="${format}"]`).check();
+  const pending = page.waitForEvent('download');
+  await page.locator('#export-button').click();
+  const download = await pending; const target = path.join(output, `edited.${format}`);
+  await download.saveAs(target); return target;
+}
+function peakAt(data, rate, seconds, frequency) {
+  let real = 0, imaginary = 0; const count = Math.min(8192, data.length - Math.floor(seconds * rate));
+  for (let i = 0; i < count; i++) {
+    const value = data[Math.floor(seconds * rate) + i]; const angle = 2 * Math.PI * frequency * i / rate;
+    real += value * Math.cos(angle); imaginary += value * Math.sin(angle);
+  }
+  return Math.hypot(real, imaginary) * 2 / count;
+}
+async function fixture(seconds = 12, channels = 2, name = 'three-tones.wav') {
+  const rate = 44100, frames = Math.round(seconds * rate); const target = path.join(output, name);
+  const file = await open(target, 'w');
+  try {
+    await file.write(wavHeader(frames, channels, rate));
+    for (let start = 0; start < frames; start += 65536) {
+      const end = Math.min(frames, start + 65536); const data = Buffer.alloc((end - start) * channels * 2);
+      for (let i = start; i < end; i++) {
+        const part = Math.min(2, Math.floor(i / rate / 4));
+        for (let channel = 0; channel < channels; channel++) {
+          const hz = [440,880,1320][part] + channel * 110;
+          data.writeInt16LE(Math.round(Math.sin(2 * Math.PI * hz * i / rate) * 12000), ((i - start) * channels + channel) * 2);
+        }
+      }
+      await file.write(data);
+    }
+  } finally { await file.close(); }
+  return target;
+}
+async function decodeInfo(file) {
+  const bytes = await readFile(file);
+  return page.evaluate(async base64 => {
+    const context = new AudioContext({ sampleRate: 44100 });
+    try {
+      const buffer = await context.decodeAudioData(Uint8Array.from(atob(base64), c=>c.charCodeAt(0)).buffer);
+      const peak = (data, seconds, hz) => {
+        let real=0,imaginary=0; const count=8192,start=Math.floor(seconds*44100);
+        for(let i=0;i<count;i++){const angle=2*Math.PI*hz*i/44100; real+=data[start+i]*Math.cos(angle);imaginary+=data[start+i]*Math.sin(angle);}
+        return Math.hypot(real,imaginary)*2/count;
+      };
+      return { duration: buffer.duration, channels: buffer.numberOfChannels, rate: buffer.sampleRate,
+        tones: [[.4,440],[2.4,880],[5,1320]].map(([seconds,hz])=>({left:peak(buffer.getChannelData(0),seconds,hz),right:peak(buffer.getChannelData(1),seconds,hz+110),leak:peak(buffer.getChannelData(0),seconds,hz+110)})) };
+    } finally { await context.close(); }
+  }, bytes.toString('base64'));
+}
+
+try {
+  await page.goto(url); assert.equal(await page.title(), '音剪 — 留下想聽的部分');
+  console.log('Landing and synthetic fixture');
+  await page.screenshot({ path: path.join(output, '01-landing.png'), fullPage: true });
+  const source = await fixture();
+  await page.locator('#file-input').setInputFiles(source);
+  await page.locator('#workspace').waitFor({ state: 'visible', timeout: 20000 });
+  assert.equal(await page.locator('#segment-count').textContent(),'1');
+  await select(2,4); await page.locator('#delete-selection').click();
+  await select(6,8); await page.locator('#delete-selection').click();
+  assert.equal(await page.locator('#segment-count').textContent(),'3');
+  assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
+  await select(1,10); await page.locator('#keep-selection').click();
+  assert.equal(await page.locator('#output-duration').textContent(),'00:05.000');
+  await page.locator('#undo').click();
+  await page.locator('#waveform').focus(); await page.keyboard.press('Control+Shift+Z');
+  assert.equal(await page.locator('#output-duration').textContent(),'00:05.000');
+  await page.keyboard.press('Control+z');
+  assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
+  await select(9,7);
+  assert.equal(await page.locator('#selection-start').getAttribute('aria-invalid'),'true');
+  assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
+  await select(2,6);
+  await page.locator('#zoom').fill('8'); await page.locator('#zoom').dispatchEvent('input');
+  assert.equal(await page.locator('#scroll-label').isVisible(),true);
+  await page.locator('#wave-scroll').fill('500'); await page.locator('#wave-scroll').dispatchEvent('input');
+  await page.locator('#zoom').fill('1'); await page.locator('#zoom').dispatchEvent('input');
+  const bounds = await page.locator('#waveform').boundingBox();
+  await page.mouse.move(bounds.x + bounds.width * .1, bounds.y + 80);
+  await page.mouse.down(); await page.mouse.move(bounds.x + bounds.width * .3, bounds.y + 80, { steps: 8 }); await page.mouse.up();
+  assert.ok(Number((await page.locator('#selection-duration').textContent()).split(' ')[0]) > 2);
+  await page.locator('#preview-result').click();
+  await page.waitForTimeout(180);
+  assert.equal(await page.locator('#toggle-play').getAttribute('aria-label'),'暫停');
+  assert.notEqual(await page.locator('#playhead-time').textContent(),'00:00.000');
+  await page.locator('#toggle-play').click();
+  await page.locator('#waveform').focus(); await page.keyboard.press('Space'); await page.waitForTimeout(80); await page.keyboard.press('Space');
+  assert.equal(await page.locator('#toggle-play').getAttribute('aria-label'),'播放');
+  await page.screenshot({ path: path.join(output, '02-editor.png'), fullPage: true });
+  const wav = await exportFile('wav'); const wavInfo = await decodeInfo(wav);
+  assert.equal(wavInfo.duration,8); assert.equal(wavInfo.channels,2); assert.equal(wavInfo.rate,44100);
+  for (const tone of wavInfo.tones) {
+    assert.ok(tone.left > .3, 'WAV left tone');
+    assert.ok(tone.right > .3, 'WAV right tone');
+    assert.ok(tone.leak < .02, 'stereo channels must not be swapped');
+  }
+  // Check sample-exact concatenation at both cut boundaries, allowing one PCM LSB.
+  const original = await readFile(source); const result = await readFile(wav);
+  let outputFrame = 0;
+  for (const [a,b] of [[0,2],[4,6],[8,12]]) {
+    for (let frame = a*44100; frame < b*44100; frame++,outputFrame++) {
+      for (let channel = 0; channel < 2; channel++) assert.ok(Math.abs(original.readInt16LE(44+frame*4+channel*2) - result.readInt16LE(44+outputFrame*4+channel*2)) <= 1);
+    }
+  }
+  const mp3 = await exportFile('mp3'); const mp3Info = await decodeInfo(mp3);
+  console.log('WAV sample boundaries and MP3 export verified');
+  assert.ok(Math.abs(mp3Info.duration - 8) < .12); assert.equal(mp3Info.channels,2);
+  for (const tone of mp3Info.tones) {
+    assert.ok(tone.left > .25);
+    assert.ok(tone.right > .25);
+  }
+  await page.locator('#file-input').setInputFiles(mp3);
+  await page.locator('#workspace').waitFor({ state:'visible' });
+  await waitFor(async()=> (await page.locator('#file-name').textContent()) === 'edited.mp3','MP3 import did not finish');
+  assert.equal(await page.locator('#segment-count').textContent(),'1');
+  await page.locator('#export-button').click();
+  await page.locator('#cancel-export').click();
+  assert.match(await page.locator('#notice').textContent(),/已取消匯出/);
+  assert.equal(await page.locator('#export-button').isEnabled(),true);
+  await select(0,1); await page.locator('#delete-selection').click();
+  await page.locator('#file-input').setInputFiles(source);
+  await page.locator('#replace-dialog').waitFor({ state:'visible' });
+  await page.locator('#replace-dialog button[value="cancel"]').click();
+  assert.equal(await page.locator('#file-name').textContent(),'edited.mp3');
+  await page.locator('#file-input').setInputFiles(source);
+  await page.locator('#replace-dialog').waitFor({ state:'visible' });
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#file-name').textContent(),'edited.mp3');
+  await page.locator('#reset').click();
+  await select(0,8.046); // Use actual displayed end for compressed input.
+  const end = (await page.locator('#original-duration').textContent());
+  await page.locator('#selection-start').fill('0'); await page.locator('#selection-end').fill(end); await page.locator('#selection-end').press('Enter');
+  await page.locator('#delete-selection').click();
+  assert.equal(await page.locator('#export-button').isDisabled(),true);
+  assert.equal(await page.locator('#empty-segments').isVisible(),true);
+  await page.locator('#undo').click();
+  assert.equal(await page.locator('#export-button').isEnabled(),true);
+  // Restore original before replacement to avoid discarding unsaved work without confirmation.
+  if (await page.locator('#reset').isEnabled()) await page.locator('#reset').click();
+  await page.locator('#file-input').setInputFiles({ name:'empty.wav', mimeType:'audio/wav', buffer:Buffer.alloc(0) });
+  assert.match(await page.locator('#notice').textContent(),/空的/);
+  await page.locator('#file-input').setInputFiles({ name:'broken.wav', mimeType:'audio/wav', buffer:Buffer.from('not a wave') });
+  if (await page.locator('#replace-dialog').isVisible()) await page.locator('#replace-dialog button[value="replace"]').click();
+  await page.locator('#import-area').waitFor({ state:'visible', timeout:15000 });
+  assert.match(await page.locator('#notice').textContent(),/無法讀取/);
+  await page.locator('#load-demo').click(); await page.locator('#workspace').waitFor({ state:'visible' });
+  assert.equal(await page.locator('#original-duration').textContent(),'00:18.000');
+  await page.setViewportSize({ width:390,height:844 }); await page.screenshot({ path:path.join(output,'03-mobile.png'),fullPage:true });
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth),false,'mobile must not overflow');
+  if (process.env.LONG_AUDIO === '1') {
+    const long = await fixture(29*60,1,'29-minutes.wav');
+    const started = Date.now();
+    await page.locator('#file-input').setInputFiles(long);
+    await waitFor(async()=> (await page.locator('#file-name').textContent()) === '29-minutes.wav','Long audio did not decode');
+    assert.equal(await page.locator('#original-duration').textContent(),'29:00.000');
+    await select(1,1739); await page.locator('#keep-selection').click();
+    await page.locator('#export-button').click();
+    await waitFor(async()=>Number(await page.locator('#progress-bar').getAttribute('value')) > 0,'Long export did not progress');
+    await page.locator('#cancel-export').click();
+    assert.equal(await page.locator('#export-button').isEnabled(),true);
+    console.log(`29-minute mono import + edit + export cancellation: ${Date.now()-started} ms`);
+  }
+  assert.deepEqual(errors,[],'browser console errors');
+  await writeFile(path.join(output,'requests.json'),JSON.stringify(requests,null,2));
+  // The host's antivirus may inject its own monitoring script before the page.
+  // Record that environmental traffic separately; never disable the security software.
+  const environmentRequests = requests.filter(request=>['me.kis.v2.scr.kaspersky-labs.com','gc.kis.v2.scr.kaspersky-labs.com'].includes(new URL(request.url).hostname));
+  const appRequests = requests.filter(request=>!environmentRequests.includes(request));
+  await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
+  assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
+  console.log(`PASS ${channel || 'chromium'}: editing, history, selection, WAV exact samples, MP3 stereo, playback, cancellation, invalid files, responsive layout, subpath, local-only network.`);
+} finally {
+  await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
+}
