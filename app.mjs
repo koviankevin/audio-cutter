@@ -4,17 +4,38 @@ import { Waveform } from './waveform.mjs';
 
 const $ = id => document.getElementById(id);
 const engine = new AudioEngine();
-const history = new History([]);
+const history = new History({ ranges:[], pending:[], selection:[0,0], cursor:0 });
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
 let pendingDeletions = [];
+let keptRanges = [];
 let pendingEdit = null;
 const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true), editPendingRange);
-const ranges = () => history.current;
+const ranges = () => keptRanges;
 const outputRanges = () => subtractMany(ranges(), pendingDeletions);
 const normalizedPending = () => normalize(pendingDeletions.flatMap(part => intersect(ranges(), part)), engine.buffer?.length ?? 0);
 const dirty = () => !!engine.buffer && signature(ranges()) !== savedSignature;
 const seconds = frames => frames / (engine.buffer?.sampleRate || SAMPLE_RATE);
+
+function captureState() {
+  return structuredClone({ ranges:keptRanges, pending:pendingDeletions, selection, cursor });
+}
+function recordEdit(before) {
+  pendingDeletions = normalizedPending();
+  const after = captureState();
+  // Selection, seeking and playback alone must not create a step or discard redo.
+  if (signature([before.ranges, before.pending]) === signature([after.ranges, after.pending])) return false;
+  return history.commit(after, before);
+}
+function applyState(state) {
+  const restored = structuredClone(state);
+  keptRanges = restored.ranges; pendingDeletions = restored.pending; selection = restored.selection;
+  cursor = restored.cursor; engine.position = cursor;
+}
+function navigateHistory(direction) {
+  if (!engine.buffer || pendingEdit || !(direction === 'undo' ? history.canUndo : history.canRedo)) return;
+  pause(); applyState(history[direction]()); revokeDownload(); clearNotice(); render();
+}
 
 function notify(message, error = false) {
   $('notice').textContent = message; $('notice').classList.toggle('error', error); $('notice').hidden = false;
@@ -40,7 +61,7 @@ function updateButtons() {
   $('preview-deletions').disabled = !hasOutput || !pendingDeletions.length;
   $('export-button').disabled = !hasAudio || !!exportJob || !hasOutput;
   $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔'}`;
-  $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : (history.canUndo ? '已匯出' : '原始音檔');
+  $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : signature(ranges()) === signature([[0, engine.buffer?.length]]) ? '原始音檔' : '已匯出';
 }
 function updateSelectionFields() {
   $('selection-start').value = formatTime(seconds(selection[0]));
@@ -111,7 +132,7 @@ function renderPending() {
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'icon-button';
     remove.setAttribute('aria-label', `移除待刪段落 ${index + 1}`); remove.title = '從待刪清單移除，保留這段音訊';
     remove.innerHTML = '<svg aria-hidden="true"><use href="#i-close"/></svg>';
-    remove.addEventListener('click', () => { pause(); pendingDeletions.splice(index, 1); clearNotice(); render(); });
+    remove.addEventListener('click', () => { pause(); const before = captureState(); pendingDeletions.splice(index, 1); recordEdit(before); clearNotice(); render(); });
     li.append(number, times, duration, remove); $('pending-list').append(li);
   });
   $('pending-summary').textContent = `共 ${formatTime(seconds(totalFrames(normalizedPending())))} · 刪除後長度 ${formatTime(seconds(totalFrames(outputRanges())))}`;
@@ -120,22 +141,25 @@ function editPendingRange(index, value, phase) {
   if (!engine.buffer) return;
   if (phase === 'start') {
     if (!pendingDeletions[index]) return;
-    pendingEdit = { index, original:structuredClone(pendingDeletions), selection:[...selection] };
-    pause(); selection = [...value]; updateSelectionFields();
+    pause(); pendingEdit = { index, before:captureState() };
+    selection = [...value]; updateSelectionFields();
   } else if (pendingEdit?.index === index) {
     if (phase === 'update') {
       pendingDeletions[index] = [...value]; selection = [...value]; revokeDownload();
       // Keep the dragged interval's index stable until release, even when edges overlap.
       render({ normalizeQueue:false });
     } else {
-      if (phase === 'cancel') { pendingDeletions = pendingEdit.original; selection = pendingEdit.selection; }
+      const before = pendingEdit.before;
+      if (phase === 'cancel') applyState(before);
       else {
         pendingDeletions = normalizedPending();
         const merged = pendingDeletions.find(([a, b]) => a <= selection[0] && b >= selection[1]);
         if (merged) selection = [...merged];
       }
-      pendingEdit = null; render();
-      if (phase === 'end') notify('已更新待刪段落，可繼續調整或直接匯出。');
+      pendingEdit = null;
+      const changed = phase === 'end' && recordEdit(before);
+      render();
+      if (changed) notify('已更新待刪段落，可按 Ctrl+Z 復原，或繼續調整後匯出。');
     }
   }
 }
@@ -143,14 +167,14 @@ function addPendingSelection(fromWave = false) {
   if (!engine.buffer || (!fromWave && !applyTimeFields())) return;
   const next = normalize([...pendingDeletions, ...intersect(ranges(), selection)], engine.buffer.length);
   if (signature(next) === signature(pendingDeletions)) { notify('這個範圍已在清單內，或沒有可刪除的音訊。'); return; }
-  pause(); pendingDeletions = next; revokeDownload(); render();
+  pause(); const before = captureState(); pendingDeletions = next; recordEdit(before); revokeDownload(); render();
   notify(`已加入待刪清單，共 ${pendingDeletions.length} 段。可繼續選段，完成後一次刪除或直接匯出。`);
 }
 function applyPendingDeletions() {
   if (!engine.buffer || !pendingDeletions.length) return;
   const count = pendingDeletions.length;
   const next = subtractMany(ranges(), pendingDeletions);
-  pendingDeletions = []; commit(next);
+  commit(next, { clearPending:true });
   notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
 function pause() {
@@ -178,9 +202,13 @@ function tick() {
   if (engine.playing) animation = requestAnimationFrame(tick);
 }
 function seek(frame) { pause(); cursor = frame; engine.position = frame; updatePlaybackUI(); }
-function commit(next) {
-  pause(); clearNotice();
-  if (history.commit(next)) { revokeDownload(); cursor = next[0]?.[0] ?? 0; engine.position = cursor; render(); }
+function commit(next, { clearPending = false, nextSelection = selection } = {}) {
+  pause(); clearNotice(); const before = captureState();
+  keptRanges = structuredClone(next);
+  if (clearPending) pendingDeletions = [];
+  selection = [...nextSelection]; cursor = next[0]?.[0] ?? 0; engine.position = cursor;
+  if (recordEdit(before)) revokeDownload();
+  render();
 }
 function edit(kind) {
   if (!applyTimeFields()) return;
@@ -200,7 +228,8 @@ async function acceptBuffer(buffer, name, bytes, token) {
   const peaks = await makePeaks(buffer, progress => { if (token === loadToken) $('loading-detail').textContent = `波形準備中 ${Math.round(progress * 100)}%`; });
   if (token !== loadToken) return;
   engine.buffer = buffer; fileName = name; cursor = 0; selection = [0, buffer.length];
-  history.reset([[0, buffer.length]]); savedSignature = signature(ranges());
+  keptRanges = [[0, buffer.length]]; pendingDeletions = [];
+  history.reset(captureState()); savedSignature = signature(ranges());
   $('file-name').textContent = name;
   $('file-meta').textContent = `${buffer.numberOfChannels === 1 ? '單聲道' : '雙聲道'} · 44.1 kHz${bytes ? ` · ${(bytes / 1024 / 1024).toFixed(1)} MB` : ' · 示範音訊'}`;
   $('original-duration').textContent = formatTime(buffer.duration);
@@ -214,7 +243,8 @@ async function acceptBuffer(buffer, name, bytes, token) {
 function beginLoading() {
   wave.cancelDrag(); pendingEdit = null;
   pause(); cancelExport(false); revokeDownload(); clearNotice(); engine.release();
-  history.reset([]); pendingDeletions = []; isLoading = true;
+  keptRanges = []; pendingDeletions = []; selection = [0,0]; cursor = 0;
+  history.reset(captureState()); isLoading = true;
   $('workspace').hidden = true; $('import-area').hidden = true; $('features').hidden = true; $('loading').hidden = false;
   $('loading-title').textContent = '正在讀取音檔'; $('loading-detail').textContent = '正在解碼，請稍候。音檔不會上傳。';
   return ++loadToken;
@@ -337,12 +367,12 @@ for (const id of ['selection-start', 'selection-end']) {
 $('delete-selection').addEventListener('click', () => edit('delete'));
 $('add-deletion').addEventListener('click', () => addPendingSelection());
 $('apply-deletions').addEventListener('click', applyPendingDeletions);
-$('clear-deletions').addEventListener('click', () => { pause(); pendingDeletions = []; clearNotice(); render(); });
+$('clear-deletions').addEventListener('click', () => { pause(); const before = captureState(); pendingDeletions = []; recordEdit(before); clearNotice(); render(); });
 $('preview-deletions').addEventListener('click', () => startPlayback(outputRanges(), 0));
 $('keep-selection').addEventListener('click', () => edit('keep'));
-$('undo').addEventListener('click', () => { pause(); history.undo(); revokeDownload(); clearNotice(); render(); });
-$('redo').addEventListener('click', () => { pause(); history.redo(); revokeDownload(); clearNotice(); render(); });
-$('reset').addEventListener('click', () => { pendingDeletions = []; commit([[0, engine.buffer.length]]); setSelection([0, engine.buffer.length]); render(); });
+$('undo').addEventListener('click', () => navigateHistory('undo'));
+$('redo').addEventListener('click', () => navigateHistory('redo'));
+$('reset').addEventListener('click', () => commit([[0, engine.buffer.length]], { clearPending:true, nextSelection:[0, engine.buffer.length] }));
 $('toggle-play').addEventListener('click', () => engine.playing ? pause() : startPlayback());
 $('preview-result').addEventListener('click', () => startPlayback(outputRanges(), 0));
 $('preview-selection').addEventListener('click', () => { if (applyTimeFields()) startPlayback(intersect(ranges(), selection), selection[0]); });

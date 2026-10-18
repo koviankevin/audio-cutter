@@ -76,16 +76,18 @@ export function parseTime(value) {
 }
 
 export class History {
-  constructor(ranges) { this.reset(ranges); }
-  reset(ranges) { this.states = [structuredClone(ranges)]; this.index = 0; }
+  constructor(state) { this.reset(state); }
+  reset(state) { this.states = [structuredClone(state)]; this.index = 0; }
   get current() { return this.states[this.index]; }
   get canUndo() { return this.index > 0; }
   get canRedo() { return this.index < this.states.length - 1; }
-  commit(ranges) {
-    if (signature(ranges) === signature(this.current)) return false;
+  commit(state, before = this.current) {
+    if (signature(state) === signature(before)) return false;
+    // Capture the selection/playhead at the action boundary, without logging navigation.
+    this.states[this.index] = structuredClone(before);
     this.states.splice(this.index + 1);
-    this.states.push(structuredClone(ranges));
-    // History contains only small interval lists, never copies of audio data.
+    this.states.push(structuredClone(state));
+    // Snapshots contain small interval lists and view coordinates, never PCM audio.
     if (this.states.length > 100) this.states.shift();
     this.index = this.states.length - 1;
     return true;

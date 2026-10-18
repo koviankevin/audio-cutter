@@ -65,6 +65,42 @@ test('time parsing accepts milliseconds and seconds but rejects malformed times'
   for (const value of ['','abc','-1','00:60','1:2','1:02.1234']) assert.ok(Number.isNaN(parseTime(value)));
   assert.equal(formatTime(59.9996),'01:00.000'); assert.equal(formatTime(1800),'30:00.000');
 });
+
+test('document history restores queued intervals, view state and merged edits as one step', () => {
+  const original = { ranges:[[0,100]], pending:[[20,40],[60,80]], selection:[60,80], cursor:12 };
+  const history = new History(original);
+  const beforeMove = structuredClone(original); beforeMove.cursor = 18;
+  const moved = { ...structuredClone(beforeMove), pending:[[30,50],[60,80]], selection:[30,50] };
+  assert.equal(history.commit(moved,beforeMove),true);
+  assert.deepEqual(history.undo(),beforeMove);
+  assert.deepEqual(history.redo(),moved);
+  const merged = { ...structuredClone(moved), pending:[[30,80]], selection:[30,80] };
+  history.commit(merged);
+  assert.deepEqual(history.undo(),moved);
+  assert.deepEqual(history.redo(),merged);
+  const applied = { ranges:[[0,30],[80,100]], pending:[], selection:[30,80], cursor:0 };
+  history.commit(applied);
+  assert.deepEqual(history.undo(),merged,'undoing batch deletion restores its queued markers');
+  assert.deepEqual(history.redo(),applied);
+  original.pending[0][0]=99; moved.pending[0][0]=99;
+  assert.deepEqual(history.undo().pending,[[30,80]],'history snapshots must not alias live marker arrays');
+});
+
+test('history skips unchanged transitions, discards redo on a new branch, and stays bounded', () => {
+  const history = new History({ ranges:[[0,1000]], pending:[] });
+  history.commit({ ranges:[[0,1000]], pending:[[20,40]] });
+  history.commit({ ranges:[[0,1000]], pending:[[30,50]] });
+  history.undo();
+  assert.equal(history.commit(structuredClone(history.current)),false);
+  assert.equal(history.canRedo,true);
+  history.commit({ ranges:[[0,1000]], pending:[[10,40]] });
+  assert.equal(history.canRedo,false);
+  for(let i=0;i<120;i++) history.commit({ ranges:[[0,1000]], pending:[[i,i+10]] });
+  assert.equal(history.states.length,100);
+  assert.equal(history.index,99);
+  history.reset({ranges:[[0,500]],pending:[]});
+  assert.equal(history.canUndo,false); assert.equal(history.canRedo,false);
+});
 test('16-bit conversion clips cleanly and WAV interleaves stereo in little endian', () => {
   assert.deepEqual([...floatToInt16(new Float32Array([-2,-1,0,1,2]))],[-32768,-32768,0,32767,32767]);
   const body = interleavePCM([new Float32Array([1,-1]),new Float32Array([.5,-.5])]);
