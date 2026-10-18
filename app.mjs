@@ -72,13 +72,31 @@ function updateSelectionFields() {
   updatePendingKeyboardUI();
 }
 function updatePendingKeyboardUI() {
-  const index = pendingDeletions.findIndex(([a, b]) => a === selection[0] && b === selection[1]);
+  const index = selectedPendingIndex();
   document.querySelectorAll('[data-pending-mode]').forEach(button => {
     button.disabled = index < 0;
     button.setAttribute('aria-pressed', String(button.dataset.pendingMode === wave.pendingMode));
   });
   document.querySelectorAll('#pending-list .pending-time').forEach((button, i) => button.setAttribute('aria-pressed', String(i === index)));
-  $('pending-keyboard-hint').textContent = index < 0 ? '先點選清單中的段落，或點選橘色段落及把手。' : `待刪 ${String(index + 1).padStart(2, '0')} · ← → 每次 10 毫秒，Shift + ← → 每次 100 毫秒。`;
+  const mode = { move:'整段移動', start:'起點', end:'終點' }[wave.pendingMode] || '整段移動';
+  $('pending-keyboard-hint').textContent = index < 0 ? '按 ↓ 選第一段，↑ 選最後一段；也可點選清單或橘色段落。' : `待刪 ${String(index + 1).padStart(2, '0')}／${pendingDeletions.length} · ${mode} · ← → 10 毫秒，Shift + ← → 100 毫秒。`;
+}
+function selectedPendingIndex() {
+  return pendingDeletions.findIndex(([a, b]) => a === selection[0] && b === selection[1]);
+}
+function activatePending(index, mode = wave.pendingMode) {
+  const range = pendingDeletions[index];
+  if (!range) return;
+  wave.pendingMode = mode; setSelection([...range]);
+  const frame = mode === 'start' ? range[0] : mode === 'end' ? range[1] : (range[0] + range[1]) / 2;
+  wave.revealFrame(frame); $('wave-scroll').value = String(Math.round(wave.scroll * 1000));
+  const list = $('pending-list'), row = list.children[index];
+  if (row) {
+    const bounds = row.getBoundingClientRect(), viewport = list.getBoundingClientRect();
+    if (bounds.top < viewport.top) list.scrollTop -= viewport.top - bounds.top;
+    else if (bounds.bottom > viewport.bottom) list.scrollTop += bounds.bottom - viewport.bottom;
+  }
+  $('waveform').focus({ preventScroll:true });
 }
 function setSelection(value) {
   if (!engine.buffer) return;
@@ -137,7 +155,7 @@ function renderPending() {
     const times = document.createElement('button'); times.type = 'button'; times.className = 'text-button pending-time';
     times.textContent = `${formatTime(seconds(a))} — ${formatTime(seconds(b))}`;
     times.setAttribute('aria-label', `選取待刪段落 ${index + 1}`);
-    times.addEventListener('click', () => { wave.pendingMode = 'move'; setSelection([a, b]); $('waveform').focus({ preventScroll:true }); });
+    times.addEventListener('click', () => activatePending(index, 'move'));
     const duration = document.createElement('span'); duration.textContent = `${seconds(b - a).toFixed(3)} 秒`;
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'icon-button';
     remove.setAttribute('aria-label', `移除待刪段落 ${index + 1}`); remove.title = '從待刪清單移除，保留這段音訊';
@@ -380,8 +398,7 @@ $('add-deletion').addEventListener('click', () => addPendingSelection());
 $('apply-deletions').addEventListener('click', applyPendingDeletions);
 $('clear-deletions').addEventListener('click', () => { pause(); const before = captureState(); pendingDeletions = []; recordEdit(before); clearNotice(); render(); });
 document.querySelectorAll('[data-pending-mode]').forEach(button => button.addEventListener('click', () => {
-  wave.pendingMode = button.dataset.pendingMode;
-  updatePendingKeyboardUI(); $('waveform').focus({ preventScroll:true });
+  activatePending(selectedPendingIndex(), button.dataset.pendingMode);
 }));
 $('preview-deletions').addEventListener('click', () => startPlayback(outputRanges(), 0));
 $('keep-selection').addEventListener('click', () => edit('keep'));
@@ -401,8 +418,20 @@ document.querySelectorAll('[name="format"]').forEach(input => input.addEventList
 $('export-button').addEventListener('click', exportAudio);
 $('cancel-export').addEventListener('click', () => cancelExport());
 document.addEventListener('keydown', event => {
+  if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select')) return;
+  const pendingShortcut = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ['ArrowUp','ArrowDown','1','2','3'].includes(event.key);
+  if (pendingShortcut && pendingDeletions.length && !wave.drag) {
+    event.preventDefault();
+    // Finish a held nudge before switching: normalization can merge/reindex markers.
+    wave.finishKeyboardEdit();
+    const index = selectedPendingIndex(), count = pendingDeletions.length;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const next = index < 0 ? (event.key === 'ArrowDown' ? 0 : count - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+      activatePending(next);
+    } else activatePending(Math.max(0, index), { '1':'move', '2':'start', '3':'end' }[event.key]);
+    return;
+  }
   if (pendingEdit) { if (event.key === 'Escape') { event.preventDefault(); wave.cancelDrag(); } return; }
-  if (!engine.buffer || isLoading || $('replace-dialog').open || event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
   const modified = event.ctrlKey || event.metaKey;
   if (modified && event.key.toLowerCase() === 'z') { event.preventDefault(); (event.shiftKey ? $('redo') : $('undo')).click(); }
   else if (modified && event.key.toLowerCase() === 'y') { event.preventDefault(); $('redo').click(); }

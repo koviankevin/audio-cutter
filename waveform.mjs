@@ -32,6 +32,12 @@ export class Waveform {
   }
   get viewLength() { return this.length / this.zoom; }
   get viewStart() { return (this.length - this.viewLength) * this.scroll; }
+  revealFrame(frame) {
+    if (this.zoom === 1) return;
+    const margin = this.viewLength * .1;
+    const start = frame < this.viewStart + margin ? frame - margin : frame > this.viewStart + this.viewLength - margin ? frame - this.viewLength + margin : this.viewStart;
+    this.scroll = Math.max(0, Math.min(1, start / (this.length - this.viewLength))); this.draw();
+  }
   xToFrame(clientX) {
     const rect = this.canvas.getBoundingClientRect();
     return Math.round(Math.max(0, Math.min(this.length, this.viewStart + Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * this.viewLength)));
