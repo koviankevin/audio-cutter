@@ -121,6 +121,46 @@ try {
   assert.equal(await page.locator('#segment-count').textContent(),'1','queued selections must not delete audio yet');
   assert.equal(await page.locator('#undo').isDisabled(),true,'queueing is separate from committing an audio edit');
   assert.match(await page.locator('#pending-summary').textContent(),/00:04.000.*00:08.000/);
+  await dragBoundary(3,4,{during:async()=>{
+    near((await queuedTimes())[0],3,'whole interval moves while dragging');
+    near((await queuedTimes())[1],5,'whole interval end moves with its start');
+    assert.equal(await page.locator('#selection-duration').textContent(),'2.000 秒','movement preserves length');
+    assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
+    assert.equal(await page.locator('#waveform').getAttribute('data-cursor'),'move');
+  }});
+  assert.deepEqual(await queuedTimes(1),[6,8],'moving one interval leaves the other unchanged');
+  await dragBoundary(4,9);
+  near((await queuedTimes())[0],4,'movement stops before the next interval');
+  near((await queuedTimes())[1],6,'neighbor collision preserves both endpoints separation');
+  assert.equal(await page.locator('#pending-count').textContent(),'2','movement must not merge intervals');
+  assert.equal(await page.locator('#selection-duration').textContent(),'2.000 秒');
+  await dragBoundary(5,.5);
+  assert.deepEqual(await queuedTimes(),[0,2],'movement clamps to file start without shortening');
+  await dragBoundary(1,2,{cancel:'escape'});
+  assert.deepEqual(await queuedTimes(),[0,2],'Escape cancels a whole-interval move');
+  await dragBoundary(1,2,{cancel:'pointercancel'});
+  assert.deepEqual(await queuedTimes(),[0,2],'pointer cancellation cancels a whole-interval move');
+  await dragBoundary(7,11.5);
+  assert.deepEqual(await queuedTimes(1),[10,12],'movement clamps to file end without shortening');
+  await page.screenshot({path:path.join(output,'06-move-pending.png'),fullPage:true});
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
+  await page.locator('#zoom').fill('2'); await page.locator('#zoom').dispatchEvent('input');
+  await page.locator('#wave-scroll').fill('500'); await page.locator('#wave-scroll').dispatchEvent('input');
+  await dragBoundary(3.5,4,{zoom:2,scroll:.5});
+  near((await queuedTimes())[0],2.5,'a partially visible interval can move in a zoomed view');
+  near((await queuedTimes())[1],4.5,'zoomed movement preserves the offscreen portion');
+  assert.equal(await page.locator('#selection-duration').textContent(),'2.000 秒');
+  await page.locator('#zoom').fill('1'); await page.locator('#zoom').dispatchEvent('input');
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await page.keyboard.down('Shift'); await dragBoundary(3,5); await page.keyboard.up('Shift');
+  near((await queuedTimes())[0],2,'Shift drag inside a pending interval adds a selection instead of moving it');
+  near((await queuedTimes())[1],5,'Shift drag retains its add-to-queue behavior');
+  await page.locator('#clear-deletions').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
   await dragBoundary(2,1,{during:async()=>{
     near((await queuedTimes())[0],1,'left boundary updates while dragging');
     near(parseTime(await page.locator('#output-duration').textContent()),7,'live projected duration');
@@ -171,6 +211,12 @@ try {
   await page.locator('#apply-deletions').click();
   assert.equal(await page.locator('#pending-panel').isVisible(),false);
   assert.equal(await page.locator('#output-duration').textContent(),'00:08.000');
+  await select(4.5,5.5); await page.locator('#add-deletion').click();
+  await dragBoundary(5,7);
+  assert.deepEqual(await queuedTimes(),[5,6],'movement stops at a deleted region without shortening');
+  await dragBoundary(5.5,3);
+  assert.deepEqual(await queuedTimes(),[4,5],'movement stays inside the same remaining audio segment');
+  await page.locator('#clear-deletions').click();
   await page.locator('#undo').click();
   assert.equal(await page.locator('#output-duration').textContent(),'00:12.000','one undo must restore the entire batch');
   await page.locator('#redo').click();
@@ -231,6 +277,17 @@ try {
   const resizedFile = await exportFile('wav'); const resizedBytes = await readFile(resizedFile);
   const resizedDuration = (resizedBytes.length - 44) / 4 / 44100;
   assert.ok(Math.abs(resizedDuration-predicted)<.001,'export includes the resized interval'); near(resizedDuration,7,'export duration reflects the dragged end');
+  await page.locator('#reset').click();
+  await select(2,4); await page.locator('#add-deletion').click();
+  await select(6,8); await page.locator('#add-deletion').click();
+  await dragBoundary(3,4);
+  const movedFile = await exportFile('wav'); const movedBytes = await readFile(movedFile);
+  assert.equal(movedBytes.length,44+8*44100*4,'whole-interval move preserves the exact exported sample count');
+  const movedLeft = new Float32Array(8*44100);
+  for(let i=0;i<movedLeft.length;i++) movedLeft[i]=movedBytes.readInt16LE(44+i*4)/32768;
+  assert.ok(peakAt(movedLeft,44100,2.4,440)>.3,'the moved cut leaves the intended source audio');
+  assert.ok(peakAt(movedLeft,44100,2.4,880)<.02,'export must use the moved position instead of the old cut');
+  assert.ok(peakAt(movedLeft,44100,3.4,880)>.3,'the next retained source interval stays in order');
   await page.locator('#reset').click();
   await select(2,4); await page.locator('#add-deletion').click();
   await select(6,8); await page.locator('#add-deletion').click();
@@ -320,7 +377,7 @@ try {
   const appRequests = requests.filter(request=>!environmentRequests.includes(request));
   await writeFile(path.join(output,'environment-requests.json'),JSON.stringify(environmentRequests,null,2));
   assert.deepEqual(appRequests.filter(request=>/^https?:/.test(request.url) && !blocked.has(request.url) && (request.method!=='GET' || !request.url.startsWith(url))), [], 'Audio must never be sent over the network');
-  console.log(`PASS ${channel || 'chromium'}: draggable pending edges, live duration, zoom/scroll, overlap merge, bounds, Escape/pointer cancellation, resized WAV export, bulk cuts, MP3 stereo, responsive layout, local-only network.`);
+  console.log(`PASS ${channel || 'chromium'}: whole-interval move with fixed length, collisions and deleted gaps, zoom/scroll, cancellation, shifted WAV samples, edge resizing, bulk cuts, MP3 stereo, responsive layout, local-only network.`);
 } finally {
   await context.close(); await browser.close(); if (server) await new Promise(resolve=>server.close(resolve));
 }

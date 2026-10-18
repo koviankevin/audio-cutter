@@ -135,7 +135,7 @@ function editPendingRange(index, value, phase) {
         if (merged) selection = [...merged];
       }
       pendingEdit = null; render();
-      if (phase === 'end') notify('已更新待刪段落的起點與終點，可繼續調整或直接匯出。');
+      if (phase === 'end') notify('已更新待刪段落，可繼續調整或直接匯出。');
     }
   }
 }

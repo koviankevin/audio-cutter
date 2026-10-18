@@ -49,14 +49,32 @@ export class Waveform {
     }
     return closest;
   }
+  pendingBodyAt(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    const y = event.clientY - rect.top, x = event.clientX - rect.left;
+    if (y < 31 || y > rect.height - 24 || x < 0 || x > rect.width) return null;
+    const frame = this.xToFrame(event.clientX);
+    const index = (this.pending || []).findIndex(([a, b]) => a <= frame && frame < b);
+    if (index < 0) return null;
+    return { index, handle:'move', range:[...this.pending[index]] };
+  }
+  moveLimits(index, [start, end]) {
+    const span = end - start;
+    const container = this.ranges.find(([a, b]) => a <= start && end <= b) || [start, end];
+    // Leave one sample between markers so release cannot merge them and change length.
+    const previous = this.pending[index - 1], next = this.pending[index + 1];
+    return [Math.max(container[0], previous ? previous[1] + 1 : 0),
+      Math.min(container[1] - span, next ? next[0] - span - 1 : this.length - span)];
+  }
   pointerDown(event) {
     if (!this.length || event.button !== 0 || this.drag || event.isPrimary === false) return;
     event.preventDefault();
     this.canvas.focus({ preventScroll: true });
-    const pending = !event.shiftKey && this.pendingHandleAt(event);
+    const pending = !event.shiftKey && (this.pendingHandleAt(event) || this.pendingBodyAt(event));
     if (pending) {
-      this.drag = { pointerId:event.pointerId, x:event.clientX, selection:pending.range, handle:pending.handle, pendingIndex:pending.index, moved:false };
-      this.canvas.dataset.cursor = 'resize'; this.canvas.setPointerCapture(event.pointerId);
+      this.drag = { pointerId:event.pointerId, x:event.clientX, frame:this.xToFrame(event.clientX), selection:pending.range, handle:pending.handle, pendingIndex:pending.index, moved:false,
+        limits:pending.handle === 'move' ? this.moveLimits(pending.index, pending.range) : null };
+      this.canvas.dataset.cursor = pending.handle === 'move' ? 'move' : 'resize'; this.canvas.setPointerCapture(event.pointerId);
       this.onEditPending(pending.index, pending.range, 'start');
       return;
     }
@@ -71,6 +89,7 @@ export class Waveform {
   pointerMove(event) {
     if (!this.drag) {
       if (!event.shiftKey && this.pendingHandleAt(event)) this.canvas.dataset.cursor = 'resize';
+      else if (!event.shiftKey && this.pendingBodyAt(event)) this.canvas.dataset.cursor = 'grab';
       else delete this.canvas.dataset.cursor;
       return;
     }
@@ -80,6 +99,12 @@ export class Waveform {
     if (!this.drag.moved) return;
     if (this.drag.pendingIndex !== undefined) {
       const range = [...this.drag.selection];
+      if (this.drag.handle === 'move') {
+        const span = range[1] - range[0];
+        const start = Math.max(this.drag.limits[0], Math.min(this.drag.limits[1], range[0] + frame - this.drag.frame));
+        this.onEditPending(this.drag.pendingIndex, [start, start + span], 'update');
+        return;
+      }
       const gap = Math.min(range[1] - range[0], Math.max(1, Math.round(this.sampleRate / 1000)));
       if (this.drag.handle === 'start') range[0] = Math.min(frame, range[1] - gap);
       else range[1] = Math.max(frame, range[0] + gap);
