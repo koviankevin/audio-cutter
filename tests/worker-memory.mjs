@@ -1,10 +1,10 @@
 // CDP's page heap does not include dedicated workers or their WASM memories.
-export async function workerMemory(browser) {
+export async function workerMemory(browser, script = 'decode-worker.js') {
   const cdp = await browser.newBrowserCDPSession();
   const results = [];
   try {
     const { targetInfos } = await cdp.send('Target.getTargets');
-    for (const target of targetInfos.filter((t) => t.type === 'worker' && t.url.endsWith('/decode-worker.js'))) {
+    for (const target of targetInfos.filter((t) => t.type === 'worker' && t.url.endsWith(`/${script}`))) {
       const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: false });
       let sequence = 0;
       async function send(method) {

@@ -1,6 +1,7 @@
 import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, junctionPreview, formatTime, parseTime } from './core.mjs';
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
+import { removeExportFile, retireExportFile } from './export-store.mjs';
 
 const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -10,6 +11,7 @@ engine.onError = error => { pause(); notify(error.message || '音訊讀取失敗
 const history = new History({ ranges:[], pending:[], selection:[0,0], cursor:0 });
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
+let downloadResource = null;
 let pendingDeletions = [];
 let keptRanges = [];
 let pendingEdit = null;
@@ -51,6 +53,9 @@ function notify(message, error = false) {
 function clearNotice() { $('notice').hidden = true; }
 function revokeDownload() {
   if (downloadURL) URL.revokeObjectURL(downloadURL);
+  if (downloadResource) {
+    retireExportFile(downloadResource); downloadResource = null;
+  }
   downloadURL = null; $('download-link').hidden = true; $('download-link').removeAttribute('href');
 }
 function updateButtons() {
@@ -373,7 +378,7 @@ async function demo() {
 
 function cancelExport(showNotice = true) {
   if (!exportJob) return;
-  exportJob.worker.terminate(); exportJob = null; $('export-progress').hidden = true; updateButtons();
+  exportJob.worker.terminate(); removeExportFile(exportJob.cacheName); exportJob = null; $('export-progress').hidden = true; updateButtons();
   if (showNotice) notify('已取消匯出，剪輯內容仍然保留。');
 }
 function exportAudio() {
@@ -389,9 +394,10 @@ function exportAudio() {
   let worker;
   try { worker = new Worker(new URL('./export-worker.js', import.meta.url)); }
   catch { notify('瀏覽器無法啟動匯出處理，請透過網站連結或本機伺服器開啟，並重試。', true); return; }
-  const job = { worker, signature: signature(parts), token: loadToken };
+  const exportId = `out-${crypto.randomUUID()}`;
+  const job = { worker, cacheName:`${exportId}.${format}`, signature: signature(parts), token: loadToken };
   exportJob = job;
-  let partIndex = 0, frame = parts[0][0];
+  let partIndex = 0, frame = parts[0][0], lastProgress = -1;
   $('export-progress').hidden = false; $('progress-bar').value = 0; $('export-status').textContent = '正在準備匯出…'; updateButtons();
   function fail(message) {
     if (exportJob !== job) return;
@@ -415,12 +421,18 @@ function exportAudio() {
     if (data.type === 'ready') pump();
     else if (data.type === 'progress') {
       const progress = Math.min(99, Math.floor(data.processed / frames * 100));
-      $('progress-bar').value = progress; $('export-status').textContent = `正在匯出 ${format.toUpperCase()}… ${progress}%`;
+      if (lastProgress !== progress) {
+        lastProgress = progress;
+        $('progress-bar').value = progress; $('export-status').textContent = `正在匯出 ${format.toUpperCase()}… ${progress}%`;
+      }
       // Yield to paint and input before handing the next chunk to the worker.
       setTimeout(pump, 0);
     } else if (data.type === 'complete') {
-      worker.terminate(); exportJob = null; $('export-progress').hidden = true;
-      if (job.token !== loadToken) return;
+      exportJob = null; $('export-progress').hidden = true;
+      if (job.token !== loadToken) { worker.terminate(); removeExportFile(job.cacheName); return; }
+      // Retain only the idle Worker's lock and disk-backed File for re-download.
+      // Revoking the download retires its Worker and schedules temporary-file cleanup.
+      downloadResource = { worker, cacheName:job.cacheName };
       savedSignature = job.signature;
       downloadURL = URL.createObjectURL(data.blob);
       const link = $('download-link'); link.href = downloadURL; link.download = name; link.hidden = false;
@@ -429,7 +441,7 @@ function exportAudio() {
   };
   worker.onerror = event => { event.preventDefault(); fail('匯出元件載入失敗，請確認網站資源完整後重試。'); };
   worker.onmessageerror = () => fail('音訊資料傳送失敗，請重試。');
-  worker.postMessage({ type: 'init', format, sampleRate: buffer.sampleRate, channels: buffer.numberOfChannels, frames });
+  worker.postMessage({ type: 'init', exportId, format, sampleRate: buffer.sampleRate, channels: buffer.numberOfChannels, frames });
 }
 
 $('choose-file').addEventListener('click', () => $('file-input').click());

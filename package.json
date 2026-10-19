@@ -8,7 +8,9 @@
     "start": "node scripts/serve.mjs",
     "test": "node --test tests/core.test.mjs",
     "test:browser": "node tests/browser.mjs",
-    "test:streaming": "node tests/streaming.mjs"
+    "test:streaming": "node tests/streaming.mjs",
+    "test:export-memory": "node tests/export-memory.mjs",
+    "test:export-lifecycle": "node tests/export-lifecycle.mjs"
   },
   "devDependencies": { "playwright": "1.62.1" },
   "license": "MIT"

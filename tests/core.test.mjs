@@ -4,6 +4,7 @@ import { normalize, subtract, subtractMany, intersect, junctionPreview, deletedR
 import { floatToInt16, interleavePCM, wavHeader } from '../pcm.mjs';
 // Keep the existing CI entry point inclusive of the streaming audio regressions.
 import './stream-core.test.mjs';
+import './export-store.test.mjs';
 
 test('trimming head/tail and deleting a middle section keep chronological intervals', () => {
   assert.deepEqual(intersect([[0,100]], [20,80]), [[20,80]]);
