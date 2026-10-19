@@ -2,6 +2,7 @@ import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, n
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 import { removeExportFile, retireExportFile } from './export-store.mjs';
+import { ExportEstimate, formatRemaining } from './export-progress.mjs';
 
 const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -378,7 +379,7 @@ async function demo() {
 
 function cancelExport(showNotice = true) {
   if (!exportJob) return;
-  exportJob.worker.terminate(); removeExportFile(exportJob.cacheName); exportJob = null; $('export-progress').hidden = true; updateButtons();
+  exportJob.worker.terminate(); removeExportFile(exportJob.cacheName); exportJob = null; $('export-progress').hidden = true; $('export-eta').textContent = ''; updateButtons();
   if (showNotice) notify('已取消匯出，剪輯內容仍然保留。');
 }
 function exportAudio() {
@@ -397,7 +398,9 @@ function exportAudio() {
   const exportId = `out-${crypto.randomUUID()}`;
   const job = { worker, cacheName:`${exportId}.${format}`, signature: signature(parts), token: loadToken };
   exportJob = job;
-  let partIndex = 0, frame = parts[0][0], lastProgress = -1;
+  let partIndex = 0, frame = parts[0][0], lastProgress = -1, lastEstimateAt = 0;
+  const estimate = new ExportEstimate(frames);
+  $('export-eta').textContent = formatRemaining(null);
   $('export-progress').hidden = false; $('progress-bar').value = 0; $('export-status').textContent = '正在準備匯出…'; updateButtons();
   function fail(message) {
     if (exportJob !== job) return;
@@ -405,7 +408,7 @@ function exportAudio() {
   }
   async function pump() {
     if (exportJob !== job) return;
-    if (partIndex >= parts.length) { $('export-status').textContent = '正在完成檔案…'; worker.postMessage({ type: 'finish' }); return; }
+    if (partIndex >= parts.length) { $('export-status').textContent = '正在完成檔案…'; $('export-eta').textContent = '最後寫入中…'; worker.postMessage({ type: 'finish' }); return; }
     try {
       const end = Math.min(parts[partIndex][1], frame + 73728);
       const data = buffer.readChannels ? await buffer.readChannels(frame, end) : Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel).slice(frame, end));
@@ -418,9 +421,11 @@ function exportAudio() {
   }
   worker.onmessage = ({ data }) => {
     if (exportJob !== job) return;
-    if (data.type === 'ready') pump();
+    if (data.type === 'ready') { estimate.start(performance.now()); pump(); }
     else if (data.type === 'progress') {
       const progress = Math.min(99, Math.floor(data.processed / frames * 100));
+      const now = performance.now(), remaining = estimate.sample(data.processed,now);
+      if (now-lastEstimateAt >= 500) { setText($('export-eta'),formatRemaining(remaining)); lastEstimateAt=now; }
       if (lastProgress !== progress) {
         lastProgress = progress;
         $('progress-bar').value = progress; $('export-status').textContent = `正在匯出 ${format.toUpperCase()}… ${progress}%`;
@@ -428,7 +433,7 @@ function exportAudio() {
       // Yield to paint and input before handing the next chunk to the worker.
       setTimeout(pump, 0);
     } else if (data.type === 'complete') {
-      exportJob = null; $('export-progress').hidden = true;
+      exportJob = null; $('export-progress').hidden = true; $('export-eta').textContent = '';
       if (job.token !== loadToken) { worker.terminate(); removeExportFile(job.cacheName); return; }
       // Retain only the idle Worker's lock and disk-backed File for re-download.
       // Revoking the download retires its Worker and schedules temporary-file cleanup.

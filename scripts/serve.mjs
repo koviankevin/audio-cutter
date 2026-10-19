@@ -3,10 +3,10 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-export const publicFiles = ['index.html','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','export-store.mjs','chunk-source.mjs','stream-core.mjs','decode-worker.js','vendor/mpg123-decoder.min.js','vendor/mpg123-decoder-LICENSE.txt','vendor/mpg123-LICENSE.txt','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
+export const publicFiles = ['index.html','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','export-store.mjs','mp3-encoder.mjs','export-progress.mjs','chunk-source.mjs','stream-core.mjs','decode-worker.js','vendor/WasmMediaEncoder-0.7.0.min.js','vendor/lame-0.7.0.wasm','vendor/wasm-media-encoders-LICENSE.txt','vendor/lame-wasm-LICENSE.txt','vendor/mpg123-decoder.min.js','vendor/mpg123-decoder-LICENSE.txt','vendor/mpg123-LICENSE.txt','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 export async function startServer({ port = 4173, base = '/' } = {}) {
-  const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8', '.svg':'image/svg+xml', '.txt':'text/plain; charset=utf-8', '.md':'text/plain; charset=utf-8' };
+  const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8', '.wasm':'application/wasm', '.svg':'image/svg+xml', '.txt':'text/plain; charset=utf-8', '.md':'text/plain; charset=utf-8' };
   const server = http.createServer(async (req, res) => {
     let pathname;
     try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }

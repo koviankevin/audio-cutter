@@ -42,6 +42,7 @@ try {
         if (data.type === 'error') window.exportAudit.error = data.message;
         else if (data.type === 'ready') window.sendExportChunk();
         else if (data.type === 'progress') {
+          window.exportAudit.wasmBytes = Math.max(window.exportAudit.wasmBytes || 0, data.wasmBytes || 0);
           window.exportAudit.processed = data.processed;
           if (window.continueExport && data.processed === frames) worker.postMessage({ type: 'finish' });
           else if (window.continueExport || data.processed < pauseAt) window.sendExportChunk();
@@ -71,6 +72,7 @@ try {
     format,
     processed: await page.evaluate(() => window.exportAudit.processed),
     workerHeap: heap[0],
+    wasmBytes: await page.evaluate(() => window.exportAudit.wasmBytes || 0),
   };
   if (process.env.EXPORT_COMPLETE === '1') {
     await page.evaluate(() => {
@@ -141,6 +143,7 @@ try {
     heap[0].backingStorageSize < 16 * 1024 ** 2,
     'encoded output must not accumulate in Worker RAM as export length grows',
   );
+  assert.ok(report.wasmBytes < 32 * 1024 ** 2, 'native encoder linear memory must remain bounded');
 } finally {
   await page.evaluate(() => window.exportWorker?.terminate()).catch(() => {});
   await browser.close();

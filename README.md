@@ -59,6 +59,10 @@ MP3 一律在背景分段解碼，避免可變位元率檔案的估計長度偏�
 
 編碼 Worker 保留一份 256 KiB 寫出緩衝，MP3 封包及 WAV PCM 區塊編碼後即寫入 OPFS；每次寫入完成才回覆主頁，避免資料排隊。完成後傳回磁碟支援的 `File` 供直接下載，不再累積整份區塊陣列或組裝完整 `Blob`。主頁只在整數進度改變時更新文字；剪輯、預聽與取消仍可操作。
 
+MP3 預設使用 **wasm-media-encoders 0.7.0／原生 LAME WebAssembly**，在同一個背景 Worker 連續編碼，保留 192 kbps CBR、44.1 kHz 及單／雙聲道。每個音訊區塊直接以 Float32 編碼，避免先轉成 Int16 及大量小呼叫；不降低位元率或取樣率來換取速度。編碼器與 WASM 皆隨站提供，不從 CDN 載入。若 WebAssembly 無法使用或資源載入失敗，則自動回退至固定版本 lamejs 1.2.1。WASM 使用約 **16 MiB 固定線性記憶體**，另有小型區塊與檔案緩衝；不隨音檔長度保留整份 PCM 或輸出。
+
+匯出面板會先顯示「正在估算剩餘時間…」，取得約一秒的實際進度後，顯示「預估剩餘 X 分 Y 秒」。估算採時間加權平滑速率，包含讀取、編碼、磁碟寫入與區塊往返的實際耗時，約每半秒更新；速度變慢時可上修剩餘時間。完成最後寫入時改顯示狀態，不提早顯示零秒；取消、失敗、換檔或下一次匯出會清除／重新估算。此數字是估計值，會隨裝置負載及磁碟速度變動。
+
 下載連結存在時，以檔案鎖保護完成的暫存，可再次下載。編輯、換檔或開始新匯出會撤銷舊連結、釋放其 Worker；為避免中斷已開始的瀏覽器下載，完成檔保留 **10 分鐘**的磁碟緩衝時間後清除。頁面已關閉時，過期檔與未完成的殘留檔會在下次匯出時清理；另一分頁仍使用的檔案會保留。取消／失敗的輸出立即清理，不走這段緩衝時間。
 
 瀏覽器的原生下載、磁碟快取與編碼器本身仍有資源成本；此設計消除應用程式隨輸出長度累積的完整位元組陣列，並非整個瀏覽器完全不使用記憶體。
@@ -83,6 +87,8 @@ npm run test:browser
 npm run test:streaming
 npm run test:export-memory
 npm run test:export-lifecycle
+npm run test:mp3-export
+npm run test:mp3-speed
 ```
 
 瀏覽器測試使用自己產生的音調資料，涵蓋多段剪輯、MP3/WAV 實際下載與解碼、左右聲道、播放與取消、錯誤檔案、鍵盤、子路徑及沒有音訊網路傳輸。需要測試已安裝的 Chrome／Edge 時可指定 `BROWSER_CHANNEL=chrome` 或 `BROWSER_CHANNEL=msedge`；`LONG_AUDIO=1` 另外測試 29 分鐘單聲道錄音。
@@ -90,6 +96,8 @@ npm run test:export-lifecycle
 `tests/streaming.mjs` 另驗證 90 秒 WAV／MP3 的實際分段讀取、48 kHz 重採樣、跨段預聽、逐樣本 WAV 匯出、單／雙聲道 MP3 再匯出、取消與換檔暫存清理、其他分頁的暫存鎖，以及 Worker 記憶體。`LONG_AUDIO=1` 額外驗證約 28.5 分鐘立體聲 MP3；首次產生測試 MP3 較久，後續會重用合成測試檔。輸出僅存於 `test-results/`。
 
 `tests/export-memory.mjs` 以真正編碼 Worker 測量匯出約 85% 時、GC 後仍保留的緩衝用量。預設 4 分鐘 WAV；設定 `EXPORT_SECONDS=1740 EXPORT_COMPLETE=1` 可測 29 分鐘完整匯出、完成階段記憶體、再次下載及撤銷連結後已開始的下載仍可完成。`EXPORT_FORMAT=mp3` 改測 MP3；`PERF_LABEL` 設定報告名稱。`tests/export-lifecycle.mjs` 另驗證取消、實際寫入時的配額錯誤、跨分頁鎖、完成檔緩衝時間到期及殘留暫存清理。
+
+`tests/mp3-export.mjs` 以 90 秒雙聲道音調驗證 WASM 路徑、192 kbps／44.1 kHz 輸出、左右聲道、剩餘時間的預熱／更新／取消重啟、手機版面與 JavaScript 相容回退。`tests/mp3-speed.mjs` 量測真正 Worker 匯出不同音調的立體聲 MP3，預設 60 秒；可用 `MP3_SECONDS` 調整測試長度，`PERF_LABEL` 設定報告名稱，`MP3_MAX_MS` 設定此電腦的速度檢查門檻。速度受環境影響，CI 不強制使用固定時間門檻。
 
 測試會記錄網路請求；若主機防毒軟體注入自身的監控腳本，其已知網域請求會另列於 `environment-requests.json`，不視為應用程式請求。測試不會停用或修改防毒設定。
 
@@ -126,6 +134,8 @@ Edge 的約 28.5 分鐘立體聲 MP3 分段解碼約 13.6 秒，約 576 MiB PCM 
 
 29 分鐘完整 WAV 約 293 MiB、MP3 約 39.8 MiB 均成功寫出、下載與再次下載；撤銷舊連結後，已開始的下載仍能完成。完成階段的主頁 backing storage 約 0.28 MiB，WAV Worker 約 0.01 MiB、MP3 Worker 約 0.16 MiB。該輪匯出主頁測試沒有超過 50 ms 的工作，20 ms 計時器持續執行。磁碟速度仍會影響完成時間；測試不保證所有裝置的延遲相同。
 
+上述 MP3 緩衝數據為原 JavaScript 編碼器。換用 WASM 後，60 秒非靜音立體聲測試約由 3.7 秒降至 1.5 秒；29 分鐘立體聲合成靜音依序對照測試約由 45.1 秒降至 14.0 秒，約快 3.2 倍。測試包含真正編碼 Worker 及分塊寫出；實際錄音、檔案讀取、初次資源載入與背景負載會影響速度。WASM 的 16 MiB 線性記憶體需另外計入，不能將 DevTools 的 backing storage 數字視為全部原生編碼記憶體。
+
 ## GitHub Pages
 
 網站：[音剪](https://koviankevin.github.io/audio-cutter/)。公開儲存庫：[koviankevin/audio-cutter](https://github.com/koviankevin/audio-cutter)。
@@ -138,4 +148,4 @@ Edge 的約 28.5 分鐘立體聲 MP3 分段解碼約 13.6 秒，約 576 MiB PCM 
 
 原生 ES modules、Canvas、Web Audio API 與 Web Worker；無後端。介面、音訊、波形、剪輯區間與 PCM 編碼各自獨立。
 
-應用程式採 MIT 授權。獨立的 MP3 編碼器 **lamejs 1.2.1** 採 LGPL-3.0；**mpg123-decoder 1.0.3** 的 JavaScript 包裝採 MIT，內含 libmpg123 WASM 採 LGPL-2.1。來源、固定版本雜湊與授權文件見 [`vendor/README.md`](vendor/README.md)。
+應用程式採 MIT 授權。**wasm-media-encoders 0.7.0** 包裝採 MIT，原生 LAME WASM 採 GNU Library GPL-2.0 或更新版本；相容 MP3 編碼器 **lamejs 1.2.1** 採 LGPL-3.0；**mpg123-decoder 1.0.3** 的 JavaScript 包裝採 MIT，內含 libmpg123 WASM 採 LGPL-2.1。來源、固定版本雜湊與授權文件見 [`vendor/README.md`](vendor/README.md)。

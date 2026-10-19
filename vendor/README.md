@@ -1,4 +1,4 @@
-# lamejs 1.2.1
+# lamejs 1.2.1 (compatibility encoder)
 
 MP3 encoder: https://github.com/zhuker/lamejs
 
@@ -7,6 +7,39 @@ MP3 encoder: https://github.com/zhuker/lamejs
 SHA-256: `15d285e2587b3bdbfd18a68de6ce07cc074f7480a82c3815da2dc1c348ec6df4`
 
 The library is licensed under LGPL-3.0; see `lamejs-LICENSE.txt`. Corresponding source for the pinned release is available at https://registry.npmjs.org/lamejs/-/lamejs-1.2.1.tgz. This library is kept as a separate, replaceable file and is not included under the application's MIT license.
+
+# wasm-media-encoders 0.7.0 / native LAME (preferred encoder)
+
+The unmodified `dist/umd/WasmMediaEncoder.min.js` and `wasm/mp3.wasm` from
+https://registry.npmjs.org/wasm-media-encoders/-/wasm-media-encoders-0.7.0.tgz
+are provided as `WasmMediaEncoder-0.7.0.min.js` and `lame-0.7.0.wasm`.
+
+SHA-256:
+- JavaScript: `dd4e17abf5377dfecc726d6ec5e7b72dab01cf3522974278e5347f4e68480fb3`
+- WebAssembly: `85e81719250b9a667b1258143f689dda70e3e57a7e7c29ab0b4cef65c8f6eb9a`
+
+The wrapper is Copyright (c) 2020–2024 arseneyr, MIT
+(`wasm-media-encoders-LICENSE.txt`). Native LAME is licensed under the GNU
+Library General Public License version 2 or later (`lame-wasm-LICENSE.txt`).
+LAME includes work by Mark Taylor, Takehiro Tominaga, Robert Hegemann,
+Gabriel Bouvigne, Alexander Leidinger and the other authors credited in its source.
+
+Pinned corresponding wrapper/build source:
+https://github.com/arseneyr/wasm-media-encoders/tree/4a45333baadbab312d1cc0911151dfad23157c51
+
+Pinned native LAME submodule:
+https://github.com/arseneyr/lame/tree/98db548e8e851defbba3184125ce10725355c332
+
+Source archives:
+https://github.com/arseneyr/wasm-media-encoders/archive/4a45333baadbab312d1cc0911151dfad23157c51.tar.gz
+https://github.com/arseneyr/lame/archive/98db548e8e851defbba3184125ce10725355c332.tar.gz
+
+These files are separate and replaceable. Follow the wrapper's Emscripten build
+instructions and pinned submodule to rebuild a modified encoder. The app calls
+`createEncoder` with bytes from the local WASM asset; it does not call the UMD
+convenience factory that fetches from unpkg. No CDN request is needed.
+CBR is explicitly 192 kbps / 44.1 kHz; the pinned native LAME CBR default quality
+is 3 (`libmp3lame/lame.c`, `LAME_DEFAULT_QUALITY`), matching the previous preset.
 
 # mpg123-decoder 1.0.3
 
