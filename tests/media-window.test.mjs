@@ -122,3 +122,24 @@ test('late playback failures from a retired window cannot report errors or resta
     player.stop({ pause: true });
   }
 });
+
+test('stopping before an owned seek event arrives preserves selection but later user seeks still exit', async () => {
+  let manual = 0;
+  const audio = new Media(),
+    player = new MediaWindowPlayer(audio, { onManualSeek: () => manual++ });
+  try {
+    player.start({ start: 3, end: 5 }, { loop: true });
+    player.stop({ pause: true });
+    await Promise.resolve();
+    assert.equal(manual, 0, 'queued owned seek must not be reported as a user seek after stop');
+    assert.equal(audio.paused, true);
+    assert.equal(player.window, null);
+    assert.equal(player.timer, null);
+    assert.equal(player.looping, false);
+    audio.currentTime = 6;
+    await Promise.resolve();
+    assert.equal(manual, 1, 'subsequent native/user seeking must still be handled');
+  } finally {
+    player.stop({ pause: true });
+  }
+});

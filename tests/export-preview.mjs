@@ -190,6 +190,16 @@ try {
     await page.keyboard.press('l');
     assert.equal(await loop.getAttribute('aria-pressed'), 'false');
     assert.equal(await player.evaluate((a) => a.paused), true);
+    // Stop in the same turn as start, before the native owned seek is delivered.
+    await page.evaluate(() => {
+      const loop = document.getElementById('result-junction-loop');
+      loop.click();
+      loop.click();
+    });
+    await page.waitForFunction(() => !document.getElementById('result-audio').seeking);
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false');
+    assert.equal(await player.evaluate((a) => a.paused), true);
+    assert.equal(await markers.nth(1).getAttribute('aria-pressed'), 'true', 'rapid loop stop must retain its selected join');
     const selectedStatus = await page.locator('#result-junction-status').textContent();
     for (const modifier of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'isComposing']) {
       assert.equal(
@@ -397,7 +407,7 @@ try {
   await writeFile(path.join(output, 'report.json'), JSON.stringify({
     runtime: runtimeInfo(browser),
     fixture: { seconds: 12, channels: 2, sampleRate: 44100, synthetic: true },
-    passed: ['mp3-wav-native-preview', 'same-download-source', 'no-autoplay-or-auto-download', 'junction-navigation', 'junction-loop', 'keyboard-guards', 'preview-error-download', 'source-retirement', 'no-whole-output-decode', 'no-upload'],
+    passed: ['mp3-wav-native-preview', 'same-download-source', 'no-autoplay-or-auto-download', 'junction-navigation', 'junction-loop', 'rapid-loop-stop', 'keyboard-guards', 'preview-error-download', 'source-retirement', 'no-whole-output-decode', 'no-upload'],
   }, null, 2));
   console.log(
     `PASS ${channel}: MP3/WAV previews, scoped bracket/L shortcuts on panel/audio/slider, repeat/modifier/IME/input guards, first/last/hidden/error/no-join states, custom loops and downloads`,

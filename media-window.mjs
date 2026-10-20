@@ -69,7 +69,9 @@ export class MediaWindowPlayer {
     this.version++;
     this.window = null;
     this.looping = false;
-    this.seekTarget = null;
+    // Native seeking/seeked events are queued. A stop may arrive before our
+    // own seeking event; keep its target until seeked so it is not a user seek.
+    if (!this.audio.seeking) this.seekTarget = null;
     if (pause) this.audio.pause();
     this.onChange();
   }
