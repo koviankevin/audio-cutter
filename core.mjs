@@ -33,6 +33,13 @@ export function junctionNeighbors(times, position, selected = -1) {
   return { previous: low - 1, next: next < times.length ? next : -1 };
 }
 
+export function junctionWindow(time, before, after, duration) {
+  if (![time, before, after, duration].every(Number.isFinite) || duration <= 0 || time < 0 || time > duration ||
+      before < 0 || after < 0 || before > 30 || after > 30 || before + after <= 0) return null;
+  const start = Math.max(0, time - before), end = Math.min(duration, time + after);
+  return end > start ? { start, end } : null;
+}
+
 export function normalize(ranges, length) {
   const result = [];
   const ordered = ranges.map(([a, b]) => [

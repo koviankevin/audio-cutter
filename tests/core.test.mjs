@@ -7,6 +7,7 @@ import './stream-core.test.mjs';
 import './export-store.test.mjs';
 import './export-progress.test.mjs';
 import './export-junctions.test.mjs';
+import './media-window.test.mjs';
 
 test('trimming head/tail and deleting a middle section keep chronological intervals', () => {
   assert.deepEqual(intersect([[0,100]], [20,80]), [[20,80]]);

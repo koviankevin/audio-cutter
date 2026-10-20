@@ -1,8 +1,9 @@
-import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, junctionPreview, formatTime, parseTime, exportJunctions, junctionNeighbors } from './core.mjs';
+import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, junctionPreview, formatTime, parseTime, exportJunctions, junctionNeighbors, junctionWindow } from './core.mjs';
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 import { removeExportFile, retireExportFile } from './export-store.mjs';
 import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed, exportResult } from './export-progress.mjs';
+import { MediaWindowPlayer } from './media-window.mjs';
 
 const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -14,6 +15,11 @@ let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
 let downloadResource = null;
 let exportPreview = null;
+const exportAudition = new MediaWindowPlayer($('result-audio'), {
+  onChange:updateExportPreviewPosition,
+  onManualSeek:() => { if (exportPreview) exportPreview.selected = -1; updateExportPreviewPosition(); },
+  onError:() => { $('result-audio-error').hidden = false; },
+});
 let pendingDeletions = [];
 let keptRanges = [];
 let pendingEdit = null;
@@ -54,6 +60,7 @@ function notify(message, error = false) {
 }
 function clearNotice() { $('notice').hidden = true; }
 function revokeDownload() {
+  exportAudition.stop({ pause:true });
   exportPreview = null;
   $('result-junction-markers').replaceChildren();
   const preview = $('result-audio');
@@ -249,7 +256,7 @@ function applyPendingDeletions() {
   notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
 function pause({ keepJunctionLoop = false, keepExportPreview = false } = {}) {
-  if (!keepExportPreview) $('result-audio').pause();
+  if (!keepExportPreview) exportAudition.stop({ pause:true });
   playingRequest++; cursor = engine.pause(); junctionPlayback = null;
   if (!keepJunctionLoop) junctionLoop = false;
   cancelAnimationFrame(animation); updatePlaybackUI(); updateButtons();
@@ -268,7 +275,7 @@ function renderExportJunctions() {
   exportPreview.junctions.forEach((time, index) => {
     const marker = document.createElement('button');
     marker.type = 'button'; marker.className = 'result-junction-marker';
-    marker.setAttribute('aria-label', `接點 ${index + 1}，${formatTime(time)}；從前 1 秒預聽`);
+    marker.setAttribute('aria-label', `接點 ${index + 1}，${formatTime(time)}；依前後秒數預聽`);
     marker.title = `接點 ${index + 1} · ${formatTime(time)}`;
     marker.setAttribute('aria-pressed', 'false'); marker.disabled = true;
     marker.addEventListener('click', () => previewExportJunction(index));
@@ -279,10 +286,16 @@ function renderExportJunctions() {
 }
 function updateExportJunctionUI(duration, position) {
   const state = exportPreview, markers = $('result-junction-markers');
-  const ready = duration > 0 && !!state;
+  const context = exportPreviewContext();
+  const ready = duration > 0 && !!state && !!context;
   const neighbors = state ? junctionNeighbors(state.junctions, position, state.selected) : { previous:-1, next:-1 };
   $('result-junction-previous').disabled = !ready || neighbors.previous < 0;
   $('result-junction-next').disabled = !ready || neighbors.next < 0;
+  $('result-junction-loop').disabled = !ready || state.selected < 0;
+  setAttribute($('result-junction-loop'), 'aria-pressed', String(exportAudition.looping));
+  setText($('result-junction-loop'), exportAudition.looping ? '停止循環' : '循環目前接點');
+  const window = exportAudition.window;
+  setText($('result-junction-window'), window ? `${exportAudition.looping ? '循環範圍' : '預聽範圍'} ${formatTime(window.start)} — ${formatTime(window.end)}` : '');
   if (!state) { setText($('result-junction-status'), ''); return; }
   const scale = duration || state.duration;
   if (state.markerDuration !== scale || state.markersReady !== ready) {
@@ -304,14 +317,29 @@ function updateExportJunctionUI(duration, position) {
 function previewExportJunction(index) {
   const state = exportPreview, preview = $('result-audio');
   if (!state || !Number.isFinite(state.junctions[index]) || preview.readyState < 1 || preview.error) return;
+  const context = exportPreviewContext();
+  const window = context && junctionWindow(state.junctions[index], context.before, context.after, preview.duration);
+  if (!window) return;
   state.selected = index;
-  state.jumpStart = Math.max(0, state.junctions[index] - 1);
-  preview.currentTime = Math.min(preview.duration, state.jumpStart);
+  exportAudition.start(window, { loop:exportAudition.looping });
+}
+function exportPreviewContext() {
+  const before = $('result-junction-before').valueAsNumber, after = $('result-junction-after').valueAsNumber;
+  return [before, after].every(value => Number.isFinite(value) && value >= 0 && value <= 30) && before + after > 0 ? { before, after } : null;
+}
+function changeExportPreviewContext() {
+  const context = exportPreviewContext();
+  for (const id of ['result-junction-before', 'result-junction-after']) {
+    if (context) $(id).removeAttribute('aria-invalid');
+    else $(id).setAttribute('aria-invalid', 'true');
+  }
+  $('result-junction-settings-error').hidden = !!context;
+  if (!context) { exportAudition.stop({ pause:true }); return; }
+  if (exportPreview?.selected >= 0 && exportAudition.window) {
+    const window = junctionWindow(exportPreview.junctions[exportPreview.selected], context.before, context.after, $('result-audio').duration);
+    if (window) exportAudition.start(window, { loop:exportAudition.looping, play:!$('result-audio').paused });
+  }
   updateExportPreviewPosition();
-  const source = downloadURL;
-  preview.play().catch(error => {
-    if (downloadURL === source && preview.getAttribute('src') === source && error.name !== 'AbortError') $('result-audio-error').hidden = false;
-  });
 }
 function stepExportJunction(direction) {
   if (!exportPreview) return;
@@ -603,16 +631,24 @@ $('result-audio').addEventListener('error', () => {
 for (const type of ['loadedmetadata', 'durationchange', 'timeupdate', 'emptied']) {
   $('result-audio').addEventListener(type, updateExportPreviewPosition);
 }
-$('result-audio').addEventListener('seeking', () => {
-  if (exportPreview?.selected >= 0 && Math.abs($('result-audio').currentTime - exportPreview.jumpStart) > .05) {
-    exportPreview.selected = -1; updateExportPreviewPosition();
-  }
-});
 $('result-junction-previous').addEventListener('click', () => stepExportJunction('previous'));
 $('result-junction-next').addEventListener('click', () => stepExportJunction('next'));
+$('result-junction-loop').addEventListener('click', () => {
+  if (exportAudition.looping) { exportAudition.stop({ pause:true }); return; }
+  if (exportPreview?.selected >= 0) {
+    const context = exportPreviewContext(), preview = $('result-audio');
+    const window = context && junctionWindow(exportPreview.junctions[exportPreview.selected], context.before, context.after, preview.duration);
+    if (window) exportAudition.start(window, { loop:true });
+  }
+});
+for (const id of ['result-junction-before', 'result-junction-after']) {
+  $(id).addEventListener('change', changeExportPreviewContext);
+  $(id).addEventListener('keydown', event => { if (event.key === 'Enter') event.currentTarget.blur(); });
+}
 $('result-audio-seek').addEventListener('input', event => {
   const preview = $('result-audio');
   if (Number.isFinite(preview.duration) && preview.duration > 0 && !preview.error) {
+    exportAudition.stop();
     if (exportPreview) exportPreview.selected = -1;
     preview.currentTime = Math.max(0, Math.min(preview.duration, Number(event.target.value)));
     updateExportPreviewPosition();

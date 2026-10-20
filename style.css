@@ -43,3 +43,11 @@
 .result-junction-buttons { display: flex; gap: 6px; margin-top: 10px; }
 .result-junction-buttons .button { flex: 1; padding: 7px 4px; font-size: .68rem; white-space: nowrap; }
 #result-junction-status { font-variant-numeric: tabular-nums; }
+.result-context-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.result-context-settings label { min-width: 0; color: var(--muted); font-size: .7rem; }
+.result-context-settings input { width: 100%; min-width: 0; margin-top: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--ink); }
+.result-context-settings input[aria-invalid="true"] { border-color: var(--red); }
+#result-junction-loop { width: 100%; margin-top: 8px; }
+#result-junction-loop[aria-pressed="true"] { background: var(--teal); color: white; }
+#result-junction-settings-error { color: var(--red); }
+#result-junction-window { font-variant-numeric: tabular-nums; }

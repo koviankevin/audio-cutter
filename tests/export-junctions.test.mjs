@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { exportJunctions, junctionNeighbors } from '../core.mjs';
+import { exportJunctions, junctionNeighbors, junctionWindow } from '../core.mjs';
 
 test('export joins use cumulative retained samples, not original timestamps', () => {
   assert.deepEqual(
@@ -60,4 +60,28 @@ test('repeated navigation advances by the selected join even while playing its l
   assert.deepEqual(junctionNeighbors(times, 0, 1), { previous: 0, next: 2 });
   assert.deepEqual(junctionNeighbors(times, 0, 2), { previous: 1, next: -1 });
   assert.deepEqual(junctionNeighbors(times, 0.25), { previous: 0, next: 1 });
+});
+
+test('custom context clamps to the actual file and allows one-sided listening', () => {
+  assert.deepEqual(junctionWindow(2, 0.25, 0.4, 8), { start: 1.75, end: 2.4 });
+  assert.deepEqual(junctionWindow(0.2, 1, 30, 8), { start: 0, end: 8 });
+  assert.deepEqual(junctionWindow(7.9, 1, 1, 8), { start: 6.9, end: 8 });
+  assert.deepEqual(junctionWindow(2, 0, 0.5, 8), { start: 2, end: 2.5 });
+  assert.deepEqual(junctionWindow(2, 0.5, 0, 8), { start: 1.5, end: 2 });
+});
+
+test('invalid contexts never create zero-length or unbounded playback windows', () => {
+  for (const [before, after] of [
+    [0, 0],
+    [-1, 1],
+    [1, -1],
+    [31, 1],
+    [1, 31],
+    [NaN, 1],
+    [1, Infinity],
+  ])
+    assert.equal(junctionWindow(2, before, after, 8), null);
+  assert.equal(junctionWindow(NaN, 1, 1, 8), null);
+  assert.equal(junctionWindow(2, 1, 1, Infinity), null);
+  assert.equal(junctionWindow(0, 1, 0, 8), null);
 });

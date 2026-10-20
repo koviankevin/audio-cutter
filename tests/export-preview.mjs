@@ -83,8 +83,28 @@ async function cleared(oldUrl) {
   assert.equal(await page.locator('#result-junction-markers button').count(), 0);
   assert.equal(await page.locator('#result-junction-previous').isDisabled(), true);
   assert.equal(await page.locator('#result-junction-next').isDisabled(), true);
+  assert.equal(await page.locator('#result-junction-loop').getAttribute('aria-pressed'), 'false');
+}
+async function contextSeconds(before, after) {
+  for (const [id, value] of [
+    ['before', before],
+    ['after', after],
+  ]) {
+    await page.locator(`#result-junction-${id}`).fill(String(value));
+    await page.locator(`#result-junction-${id}`).press('Enter');
+  }
 }
 async function reviewJoin(control, index, start) {
+  await player.evaluate((a) => {
+    window.reviewStart = null;
+    a.addEventListener(
+      'seeked',
+      () => {
+        window.reviewStart = a.currentTime;
+      },
+      { once: true },
+    );
+  });
   await control.click();
   await page.waitForFunction((index) => {
     const a = document.getElementById('result-audio');
@@ -96,7 +116,7 @@ async function reviewJoin(control, index, start) {
   }, index);
   await player.evaluate((a) => a.pause());
   assert.ok(
-    Math.abs((await player.evaluate((a) => a.currentTime)) - start) < 0.4,
+    Math.abs((await page.evaluate(() => window.reviewStart)) - start) < 0.1,
     'play from one second before the selected join',
   );
 }
@@ -128,11 +148,68 @@ try {
     await reviewJoin(previous, 0, 1);
     assert.equal(await previous.isDisabled(), true);
     await reviewJoin(markers.nth(1), 1, 3);
+    const loop = page.locator('#result-junction-loop');
+    await contextSeconds(0.2, 0.3);
+    assert.equal(await player.evaluate((a) => a.paused), true, 'changing seconds while paused must stay paused');
+    await page.evaluate(() => {
+      window.loopSeeks = [];
+      const audio = document.getElementById('result-audio');
+      audio.addEventListener('seeking', () => window.loopSeeks.push(audio.currentTime));
+    });
+    await loop.click();
+    await page.waitForFunction(() => window.loopSeeks.filter((t) => Math.abs(t - 3.8) < 0.05).length >= 4);
+    assert.equal(await loop.getAttribute('aria-pressed'), 'true');
+    assert.match(await page.locator('#result-junction-window').textContent(), /00:03\.800 — 00:04\.300/);
+    await page.evaluate(() => {
+      window.loopSeeks = [];
+    });
+    await contextSeconds(0.4, 0.2);
+    await page.waitForFunction(() => window.loopSeeks.filter((t) => Math.abs(t - 3.6) < 0.05).length >= 3);
+    assert.match(await page.locator('#result-junction-window').textContent(), /00:03\.600 — 00:04\.200/);
+    await previous.click();
+    await page.waitForFunction(() =>
+      document.getElementById('result-junction-status').textContent.includes('接點 1 / 2'),
+    );
+    assert.equal(await loop.getAttribute('aria-pressed'), 'true', 'changing joins must preserve the loop');
+    await page.screenshot({ path: path.join(output, `loop-${format}.png`), fullPage: true });
+    await player.evaluate((a) => a.pause());
+    await page.waitForTimeout(100);
+    const frozen = await player.evaluate((a) => a.currentTime),
+      seekCount = await page.evaluate(() => window.loopSeeks.length);
+    await page.waitForTimeout(700);
+    assert.equal(await player.evaluate((a) => a.paused), true);
+    assert.equal(await player.evaluate((a) => a.currentTime), frozen);
+    assert.equal(await page.evaluate(() => window.loopSeeks.length), seekCount, 'native pause cancels the loop timer');
+    await player.evaluate((a) => a.play());
+    await page.waitForFunction((count) => window.loopSeeks.length > count, seekCount);
+    await loop.click();
+    assert.equal(await player.evaluate((a) => a.paused), true);
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false');
+    await contextSeconds(-1, 0.3);
+    assert.equal(await page.locator('#result-junction-settings-error').isVisible(), true);
+    assert.equal(await loop.isDisabled(), true);
+    await contextSeconds(0, 0);
+    assert.equal(await page.locator('#result-junction-settings-error').isVisible(), true);
+    await contextSeconds(0.25, 0.25);
+    assert.equal(await page.locator('#result-junction-settings-error').isVisible(), false);
+    await markers.nth(0).click();
+    await page.waitForFunction(() => {
+      const a = document.getElementById('result-audio');
+      return a.paused && a.currentTime >= 2.24 && a.currentTime <= 2.26;
+    });
+    assert.equal(
+      await markers.nth(0).getAttribute('aria-pressed'),
+      'true',
+      'one-shot stops at the configured end and keeps its join',
+    );
+    await contextSeconds(1, 1);
+    await loop.click();
     // Manual/native seeking leaves the numbered review and follows the playhead.
     await player.evaluate((a) => {
       a.currentTime = 0;
     });
     await page.waitForFunction(() => document.getElementById('result-junction-status').textContent === '共 2 個接點');
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false', 'manual seeking exits the loop');
     assert.equal(await previous.isDisabled(), true);
     assert.equal(await next.isEnabled(), true);
     await page.locator('#preview-result').click();
@@ -159,9 +236,11 @@ try {
     await player.evaluate((a) => a.play());
     await page.locator('#preview-result').click();
     assert.equal(await player.evaluate((a) => a.paused), true, 'editor playback must pause the export preview');
-    await player.evaluate((a) => a.play());
+    await markers.nth(0).click();
+    await loop.click();
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
     assert.equal(await player.evaluate((a) => a.paused), true);
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false');
     assert.equal(await player.getAttribute('src'), src, 'back/forward cache keeps the completed file');
     await player.evaluate(async (a) => {
       a.currentTime = a.duration - 0.1;
@@ -220,6 +299,7 @@ try {
   assert.equal(await page.locator('#result-junction-markers button').count(), 0);
   assert.equal(await page.locator('#result-junction-previous').isDisabled(), true);
   assert.equal(await page.locator('#result-junction-next').isDisabled(), true);
+  assert.equal(await page.locator('#result-junction-loop').isDisabled(), true);
   assert.match(await page.locator('#result-junction-status').textContent(), /沒有剪輯接點/);
   assert.deepEqual(errors, []);
   // Match the browser suite: the host antivirus injects its own monitoring script.
@@ -236,7 +316,7 @@ try {
     'no audio upload or external application requests',
   );
   console.log(
-    `PASS ${channel}: actual MP3/WAV, join markers and lead-in navigation, first/last/no-join states, native/slider seeks, keyboard, replay, errors, cleanup, responsive and local-only`,
+    `PASS ${channel}: actual MP3/WAV, custom bounded/looped join previews, live context edits, loop navigation/pause/resume/stop, validation, native seeks, lifecycle cleanup and downloads`,
   );
 } finally {
   await context.close();
