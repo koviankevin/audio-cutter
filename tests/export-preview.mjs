@@ -84,6 +84,13 @@ async function cleared(oldUrl) {
   assert.equal(await page.locator('#result-junction-previous').isDisabled(), true);
   assert.equal(await page.locator('#result-junction-next').isDisabled(), true);
   assert.equal(await page.locator('#result-junction-loop').getAttribute('aria-pressed'), 'false');
+  assert.equal(
+    await page
+      .locator('.result-preview')
+      .evaluate((el) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true, cancelable: true }))),
+    true,
+    'hidden player ignores shortcuts',
+  );
 }
 async function contextSeconds(before, after) {
   for (const [id, value] of [
@@ -149,6 +156,69 @@ try {
     assert.equal(await previous.isDisabled(), true);
     await reviewJoin(markers.nth(1), 1, 3);
     const loop = page.locator('#result-junction-loop');
+    const panel = page.locator('.result-preview');
+    await page.locator('#export-button').focus();
+    await page.keyboard.press('Tab');
+    assert.equal(
+      await panel.evaluate((el) => el === document.activeElement),
+      true,
+      'Tab from export enters the preview keyboard group',
+    );
+    await reviewJoin({ click: () => page.keyboard.press('[') }, 0, 1);
+    await page.keyboard.press('[');
+    assert.equal(
+      await markers.nth(0).getAttribute('aria-pressed'),
+      'true',
+      'previous shortcut cannot wrap before the first join',
+    );
+    await reviewJoin({ click: () => page.keyboard.press(']') }, 1, 3);
+    await page.keyboard.press(']');
+    assert.equal(
+      await markers.nth(1).getAttribute('aria-pressed'),
+      'true',
+      'next shortcut cannot wrap after the last join',
+    );
+    await player.focus();
+    await reviewJoin({ click: () => page.keyboard.press('[') }, 0, 1);
+    await page.locator('#result-audio-seek').focus();
+    await reviewJoin({ click: () => page.keyboard.press(']') }, 1, 3);
+    await page.keyboard.down('l');
+    await page.keyboard.down('l');
+    await page.keyboard.up('l');
+    assert.equal(await loop.getAttribute('aria-pressed'), 'true', 'holding the loop shortcut only toggles once');
+    await page.keyboard.press('l');
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false');
+    assert.equal(await player.evaluate((a) => a.paused), true);
+    const selectedStatus = await page.locator('#result-junction-status').textContent();
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'isComposing']) {
+      assert.equal(
+        await panel.evaluate(
+          (el, modifier) =>
+            el.dispatchEvent(
+              new KeyboardEvent('keydown', {
+                key: 'l',
+                bubbles: true,
+                cancelable: true,
+                [modifier]: true,
+              }),
+            ),
+          modifier,
+        ),
+        true,
+        'modified/composing keys must keep their browser defaults',
+      );
+      assert.equal(await loop.getAttribute('aria-pressed'), 'false');
+    }
+    await page.locator('#result-junction-before').focus();
+    await page.keyboard.press('l');
+    await page.keyboard.press('[');
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false', 'seconds input does not trigger shortcuts');
+    assert.equal(await page.locator('#result-junction-status').textContent(), selectedStatus);
+    await page.locator('#waveform').focus();
+    await page.keyboard.press('[');
+    await page.keyboard.press('l');
+    assert.equal(await loop.getAttribute('aria-pressed'), 'false', 'editor focus does not trigger export shortcuts');
+    await reviewJoin(markers.nth(1), 1, 3);
     await contextSeconds(0.2, 0.3);
     assert.equal(await player.evaluate((a) => a.paused), true, 'changing seconds while paused must stay paused');
     await page.evaluate(() => {
@@ -269,6 +339,10 @@ try {
       a.src = URL.createObjectURL(new Blob(['invalid media'], { type: 'audio/mpeg' }));
     });
     await page.locator('#result-audio-error').waitFor({ state: 'visible' });
+    await panel.focus();
+    await page.keyboard.press(']');
+    await page.keyboard.press('l');
+    assert.equal(await player.evaluate((a) => a.paused), true, 'shortcuts cannot restart failed media');
     const pending = page.waitForEvent('download');
     await page.locator('#download-link').click();
     const download = await pending;
@@ -300,6 +374,10 @@ try {
   assert.equal(await page.locator('#result-junction-previous').isDisabled(), true);
   assert.equal(await page.locator('#result-junction-next').isDisabled(), true);
   assert.equal(await page.locator('#result-junction-loop').isDisabled(), true);
+  await page.locator('.result-preview').focus();
+  await page.keyboard.press(']');
+  await page.keyboard.press('l');
+  assert.equal(await player.evaluate((a) => a.paused), true, 'no-join shortcuts cannot start playback');
   assert.match(await page.locator('#result-junction-status').textContent(), /沒有剪輯接點/);
   assert.deepEqual(errors, []);
   // Match the browser suite: the host antivirus injects its own monitoring script.
@@ -316,7 +394,7 @@ try {
     'no audio upload or external application requests',
   );
   console.log(
-    `PASS ${channel}: actual MP3/WAV, custom bounded/looped join previews, live context edits, loop navigation/pause/resume/stop, validation, native seeks, lifecycle cleanup and downloads`,
+    `PASS ${channel}: MP3/WAV previews, scoped bracket/L shortcuts on panel/audio/slider, repeat/modifier/IME/input guards, first/last/hidden/error/no-join states, custom loops and downloads`,
   );
 } finally {
   await context.close();

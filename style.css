@@ -51,3 +51,5 @@
 #result-junction-loop[aria-pressed="true"] { background: var(--teal); color: white; }
 #result-junction-settings-error { color: var(--red); }
 #result-junction-window { font-variant-numeric: tabular-nums; }
+.result-preview:focus-visible { outline: 2px solid var(--teal); outline-offset: 5px; border-radius: 4px; }
+.result-shortcuts kbd { font: inherit; border: 1px solid #b7ccc3; border-radius: 3px; padding: 0 3px; color: var(--ink); }

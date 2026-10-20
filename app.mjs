@@ -654,6 +654,15 @@ $('result-audio-seek').addEventListener('input', event => {
     updateExportPreviewPosition();
   }
 });
+document.querySelector('.result-preview').addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+      event.target.isContentEditable || event.target.closest('input:not([type="range"]), textarea, select') ||
+      $('export-result').hidden || !exportPreview) return;
+  const target = { '[':'result-junction-previous', ']':'result-junction-next', 'l':'result-junction-loop' }[event.key.toLowerCase()];
+  if (!target) return;
+  event.preventDefault();
+  if (!event.repeat) $(target).click();
+});
 document.addEventListener('keydown', event => {
   if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select, audio, .result-preview')) return;
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p' && !wave.drag) {
