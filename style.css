@@ -34,3 +34,12 @@
 .result-seek-heading label { margin: 0; font-size: .7rem; }
 .result-seek-heading output { color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
 #result-audio-seek { display: block; width: 100%; margin: 6px 0 0; accent-color: var(--teal); }
+.result-junction-markers { position: relative; height: 18px; margin: 0 8px; }
+.result-junction-markers:empty { display: none; }
+.result-junction-marker { position: absolute; bottom: 0; width: 14px; height: 18px; padding: 0; border: 0; border-radius: 3px; background: transparent; transform: translateX(-50%); }
+.result-junction-marker::after { content: ''; position: absolute; bottom: 0; left: 6px; width: 2px; height: 10px; background: var(--teal); }
+.result-junction-marker:hover:not(:disabled) { background: #167d721a; }
+.result-junction-marker[aria-pressed="true"]::after { height: 17px; background: var(--red); }
+.result-junction-buttons { display: flex; gap: 6px; margin-top: 10px; }
+.result-junction-buttons .button { flex: 1; padding: 7px 4px; font-size: .68rem; white-space: nowrap; }
+#result-junction-status { font-variant-numeric: tabular-nums; }

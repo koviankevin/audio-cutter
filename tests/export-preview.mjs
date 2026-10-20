@@ -80,6 +80,25 @@ async function cleared(oldUrl) {
   assert.equal(await page.locator('#export-result').isVisible(), false);
   assert.equal(await page.evaluate((url) => window.revokedUrls.has(url), oldUrl), true);
   assert.equal(await page.locator('#result-audio-error').isVisible(), false);
+  assert.equal(await page.locator('#result-junction-markers button').count(), 0);
+  assert.equal(await page.locator('#result-junction-previous').isDisabled(), true);
+  assert.equal(await page.locator('#result-junction-next').isDisabled(), true);
+}
+async function reviewJoin(control, index, start) {
+  await control.click();
+  await page.waitForFunction((index) => {
+    const a = document.getElementById('result-audio');
+    return (
+      !a.paused &&
+      !a.seeking &&
+      document.getElementById('result-junction-markers').children[index].getAttribute('aria-pressed') === 'true'
+    );
+  }, index);
+  await player.evaluate((a) => a.pause());
+  assert.ok(
+    Math.abs((await player.evaluate((a) => a.currentTime)) - start) < 0.4,
+    'play from one second before the selected join',
+  );
 }
 try {
   await page.goto(url);
@@ -96,6 +115,26 @@ try {
     const decodes = await page.evaluate(() => window.decodeCalls);
     const previousDownloads = downloads;
     let src = await exportFile(format);
+    const markers = page.locator('#result-junction-markers button');
+    const previous = page.locator('#result-junction-previous'),
+      next = page.locator('#result-junction-next');
+    assert.equal(await markers.count(), 2);
+    assert.match(await markers.nth(0).getAttribute('aria-label'), /00:02\.000/);
+    assert.match(await markers.nth(1).getAttribute('aria-label'), /00:04\.000/);
+    assert.equal(await previous.isDisabled(), true);
+    await reviewJoin(next, 0, 1);
+    await reviewJoin(next, 1, 3);
+    assert.equal(await next.isDisabled(), true);
+    await reviewJoin(previous, 0, 1);
+    assert.equal(await previous.isDisabled(), true);
+    await reviewJoin(markers.nth(1), 1, 3);
+    // Manual/native seeking leaves the numbered review and follows the playhead.
+    await player.evaluate((a) => {
+      a.currentTime = 0;
+    });
+    await page.waitForFunction(() => document.getElementById('result-junction-status').textContent === '共 2 個接點');
+    assert.equal(await previous.isDisabled(), true);
+    assert.equal(await next.isEnabled(), true);
     await page.locator('#preview-result').click();
     await page.waitForFunction(() => document.getElementById('toggle-play').getAttribute('aria-label') === '暫停');
     await player.evaluate((a) => a.play());
@@ -174,6 +213,14 @@ try {
     await page.locator('#workspace').waitFor({ state: 'visible' });
     await cleared(src);
   }
+  // A single kept piece has no internal seam, even with both ends trimmed.
+  await select(1, 11);
+  await page.locator('#keep-selection').click();
+  await exportFile('wav', 10);
+  assert.equal(await page.locator('#result-junction-markers button').count(), 0);
+  assert.equal(await page.locator('#result-junction-previous').isDisabled(), true);
+  assert.equal(await page.locator('#result-junction-next').isDisabled(), true);
+  assert.match(await page.locator('#result-junction-status').textContent(), /沒有剪輯接點/);
   assert.deepEqual(errors, []);
   // Match the browser suite: the host antivirus injects its own monitoring script.
   // Keep its traffic separate from application traffic without disabling it.
@@ -189,7 +236,7 @@ try {
     'no audio upload or external application requests',
   );
   console.log(
-    `PASS ${channel}: actual MP3/WAV preview, seek across seams, native keyboard, playback exclusion, replay/end, errors keep download, cleanup/replacement, responsive and local-only`,
+    `PASS ${channel}: actual MP3/WAV, join markers and lead-in navigation, first/last/no-join states, native/slider seeks, keyboard, replay, errors, cleanup, responsive and local-only`,
   );
 } finally {
   await context.close();

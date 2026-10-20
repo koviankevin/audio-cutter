@@ -5,6 +5,34 @@ export const MAX_SECONDS = 30 * 60;
 export const totalFrames = ranges => ranges.reduce((sum, [a, b]) => sum + b - a, 0);
 export const signature = ranges => JSON.stringify(ranges);
 
+// Use the export's ordered sample intervals. Head/tail trims and boundaries
+// between contiguous intervals are not joins; only removed gaps create one.
+export function exportJunctions(ranges, sampleRate) {
+  const result = [];
+  let frames = 0, previousEnd = null;
+  for (const [start, end] of ranges) {
+    if (end <= start) continue;
+    if (previousEnd !== null && start > previousEnd) result.push(frames / sampleRate);
+    frames += end - start;
+    previousEnd = end;
+  }
+  return result;
+}
+
+export function junctionNeighbors(times, position, selected = -1) {
+  if (selected >= 0 && selected < times.length) {
+    return { previous: selected > 0 ? selected - 1 : -1, next: selected + 1 < times.length ? selected + 1 : -1 };
+  }
+  let low = 0, high = times.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (times[middle] < position) low = middle + 1;
+    else high = middle;
+  }
+  const next = times[low] === position ? low + 1 : low;
+  return { previous: low - 1, next: next < times.length ? next : -1 };
+}
+
 export function normalize(ranges, length) {
   const result = [];
   const ordered = ranges.map(([a, b]) => [
