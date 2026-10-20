@@ -12,7 +12,8 @@
     "test:export-memory": "node tests/export-memory.mjs",
     "test:export-lifecycle": "node tests/export-lifecycle.mjs",
     "test:mp3-speed": "node tests/mp3-speed.mjs",
-    "test:mp3-export": "node tests/mp3-export.mjs"
+    "test:mp3-export": "node tests/mp3-export.mjs",
+    "test:export-preview": "node tests/export-preview.mjs"
   },
   "devDependencies": { "playwright": "1.62.1" },
   "license": "MIT"

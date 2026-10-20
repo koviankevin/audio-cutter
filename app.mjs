@@ -1,8 +1,9 @@
-import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, junctionPreview, formatTime, parseTime } from './core.mjs';
+import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, normalize, subtract, subtractMany, intersect, junctionPreview, formatTime, parseTime, exportJunctions, junctionNeighbors, junctionWindow } from './core.mjs';
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 import { removeExportFile, retireExportFile } from './export-store.mjs';
-import { ExportEstimate, formatRemaining } from './export-progress.mjs';
+import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed, exportResult } from './export-progress.mjs';
+import { MediaWindowPlayer } from './media-window.mjs';
 
 const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -13,6 +14,12 @@ const history = new History({ ranges:[], pending:[], selection:[0,0], cursor:0 }
 let selection = [0, 0], cursor = 0, fileName = '', savedSignature = '[]';
 let loadToken = 0, isLoading = false, exportJob = null, downloadURL = null, animation = 0, playingRequest = 0;
 let downloadResource = null;
+let exportPreview = null;
+const exportAudition = new MediaWindowPlayer($('result-audio'), {
+  onChange:updateExportPreviewPosition,
+  onManualSeek:() => { if (exportPreview) exportPreview.selected = -1; updateExportPreviewPosition(); },
+  onError:() => { $('result-audio-error').hidden = false; },
+});
 let pendingDeletions = [];
 let keptRanges = [];
 let pendingEdit = null;
@@ -53,11 +60,24 @@ function notify(message, error = false) {
 }
 function clearNotice() { $('notice').hidden = true; }
 function revokeDownload() {
+  exportAudition.stop({ pause:true });
+  exportPreview = null;
+  $('result-junction-markers').replaceChildren();
+  const preview = $('result-audio');
+  if (preview.hasAttribute('src')) {
+    preview.pause(); preview.removeAttribute('src'); preview.load();
+    updateExportPreviewPosition();
+  }
+  $('result-audio-error').hidden = true;
   if (downloadURL) URL.revokeObjectURL(downloadURL);
   if (downloadResource) {
     retireExportFile(downloadResource); downloadResource = null;
   }
   downloadURL = null; $('download-link').hidden = true; $('download-link').removeAttribute('href');
+  $('export-result').hidden = true;
+  for (const id of ['result-name', 'result-elapsed', 'result-speed', 'result-size']) $(id).textContent = '';
+  $('result-size').removeAttribute('title');
+  updateExportJunctionUI(0, 0);
 }
 function updateButtons() {
   const loaded = !!engine.buffer && !isLoading;
@@ -235,10 +255,96 @@ function applyPendingDeletions() {
   commit(next, { clearPending:true });
   notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
-function pause({ keepJunctionLoop = false } = {}) {
+function pause({ keepJunctionLoop = false, keepExportPreview = false } = {}) {
+  if (!keepExportPreview) exportAudition.stop({ pause:true });
   playingRequest++; cursor = engine.pause(); junctionPlayback = null;
   if (!keepJunctionLoop) junctionLoop = false;
   cancelAnimationFrame(animation); updatePlaybackUI(); updateButtons();
+}
+function updateExportPreviewPosition() {
+  const preview = $('result-audio'), seek = $('result-audio-seek');
+  const duration = Number.isFinite(preview.duration) && !preview.error ? preview.duration : 0;
+  const position = Math.min(duration, Math.max(0, preview.currentTime || 0));
+  seek.disabled = !(duration > 0); seek.max = duration; seek.value = position;
+  const label = `${formatElapsed(position)} / ${duration > 0 ? formatElapsed(duration) : '--:--'}`;
+  setText($('result-audio-position'), label); setAttribute(seek, 'aria-valuetext', label);
+  updateExportJunctionUI(duration, position);
+}
+function renderExportJunctions() {
+  const fragment = document.createDocumentFragment();
+  exportPreview.junctions.forEach((time, index) => {
+    const marker = document.createElement('button');
+    marker.type = 'button'; marker.className = 'result-junction-marker';
+    marker.setAttribute('aria-label', `接點 ${index + 1}，${formatTime(time)}；依前後秒數預聽`);
+    marker.title = `接點 ${index + 1} · ${formatTime(time)}`;
+    marker.setAttribute('aria-pressed', 'false'); marker.disabled = true;
+    marker.addEventListener('click', () => previewExportJunction(index));
+    fragment.append(marker);
+  });
+  $('result-junction-markers').replaceChildren(fragment);
+  updateExportPreviewPosition();
+}
+function updateExportJunctionUI(duration, position) {
+  const state = exportPreview, markers = $('result-junction-markers');
+  const context = exportPreviewContext();
+  const ready = duration > 0 && !!state && !!context;
+  const neighbors = state ? junctionNeighbors(state.junctions, position, state.selected) : { previous:-1, next:-1 };
+  $('result-junction-previous').disabled = !ready || neighbors.previous < 0;
+  $('result-junction-next').disabled = !ready || neighbors.next < 0;
+  $('result-junction-loop').disabled = !ready || state.selected < 0;
+  setAttribute($('result-junction-loop'), 'aria-pressed', String(exportAudition.looping));
+  setText($('result-junction-loop'), exportAudition.looping ? '停止循環' : '循環目前接點');
+  const window = exportAudition.window;
+  setText($('result-junction-window'), window ? `${exportAudition.looping ? '循環範圍' : '預聽範圍'} ${formatTime(window.start)} — ${formatTime(window.end)}` : '');
+  if (!state) { setText($('result-junction-status'), ''); return; }
+  const scale = duration || state.duration;
+  if (state.markerDuration !== scale || state.markersReady !== ready) {
+    state.junctions.forEach((time, index) => {
+      markers.children[index].style.left = `${Math.min(100, time / scale * 100)}%`;
+      markers.children[index].disabled = !ready;
+    });
+    state.markerDuration = scale; state.markersReady = ready;
+  }
+  if (state.renderedSelection !== state.selected) {
+    if (state.renderedSelection >= 0) setAttribute(markers.children[state.renderedSelection], 'aria-pressed', 'false');
+    if (state.selected >= 0) setAttribute(markers.children[state.selected], 'aria-pressed', 'true');
+    state.renderedSelection = state.selected;
+  }
+  setText($('result-junction-status'), state.selected >= 0
+    ? `接點 ${state.selected + 1} / ${state.junctions.length} · ${formatTime(state.junctions[state.selected])}`
+    : state.junctions.length ? `共 ${state.junctions.length} 個接點` : '這次匯出沒有剪輯接點');
+}
+function previewExportJunction(index) {
+  const state = exportPreview, preview = $('result-audio');
+  if (!state || !Number.isFinite(state.junctions[index]) || preview.readyState < 1 || preview.error) return;
+  const context = exportPreviewContext();
+  const window = context && junctionWindow(state.junctions[index], context.before, context.after, preview.duration);
+  if (!window) return;
+  state.selected = index;
+  exportAudition.start(window, { loop:exportAudition.looping });
+}
+function exportPreviewContext() {
+  const before = $('result-junction-before').valueAsNumber, after = $('result-junction-after').valueAsNumber;
+  return [before, after].every(value => Number.isFinite(value) && value >= 0 && value <= 30) && before + after > 0 ? { before, after } : null;
+}
+function changeExportPreviewContext() {
+  const context = exportPreviewContext();
+  for (const id of ['result-junction-before', 'result-junction-after']) {
+    if (context) $(id).removeAttribute('aria-invalid');
+    else $(id).setAttribute('aria-invalid', 'true');
+  }
+  $('result-junction-settings-error').hidden = !!context;
+  if (!context) { exportAudition.stop({ pause:true }); return; }
+  if (exportPreview?.selected >= 0 && exportAudition.window) {
+    const window = junctionWindow(exportPreview.junctions[exportPreview.selected], context.before, context.after, $('result-audio').duration);
+    if (window) exportAudition.start(window, { loop:exportAudition.looping, play:!$('result-audio').paused });
+  }
+  updateExportPreviewPosition();
+}
+function stepExportJunction(direction) {
+  if (!exportPreview) return;
+  const neighbors = junctionNeighbors(exportPreview.junctions, $('result-audio').currentTime, exportPreview.selected);
+  previewExportJunction(neighbors[direction]);
 }
 function updatePlaybackUI() {
   // Read/draw before changing text, so cursor animation doesn't force a layout.
@@ -377,9 +483,15 @@ async function demo() {
   catch { if (token === loadToken) { isLoading = false; returnToImport(); notify('無法建立示範音訊，請嘗試重新整理頁面。', true); } }
 }
 
+function clearExportProgress(job) {
+  clearInterval(job.timer);
+  $('export-progress').hidden = true;
+  for (const id of ['export-eta', 'export-elapsed', 'export-speed']) $(id).textContent = '';
+}
 function cancelExport(showNotice = true) {
   if (!exportJob) return;
-  exportJob.worker.terminate(); removeExportFile(exportJob.cacheName); exportJob = null; $('export-progress').hidden = true; $('export-eta').textContent = ''; updateButtons();
+  clearExportProgress(exportJob);
+  exportJob.worker.terminate(); removeExportFile(exportJob.cacheName); exportJob = null; updateButtons();
   if (showNotice) notify('已取消匯出，剪輯內容仍然保留。');
 }
 function exportAudio() {
@@ -396,11 +508,19 @@ function exportAudio() {
   try { worker = new Worker(new URL('./export-worker.js', import.meta.url)); }
   catch { notify('瀏覽器無法啟動匯出處理，請透過網站連結或本機伺服器開啟，並重試。', true); return; }
   const exportId = `out-${crypto.randomUUID()}`;
-  const job = { worker, cacheName:`${exportId}.${format}`, signature: signature(parts), token: loadToken };
+  const job = { worker, cacheName:`${exportId}.${format}`, signature: signature(parts), token: loadToken, startedAt: performance.now(), finishing: false };
   exportJob = job;
-  let partIndex = 0, frame = parts[0][0], lastProgress = -1, lastEstimateAt = 0;
+  let partIndex = 0, frame = parts[0][0], lastProgress = -1;
   const estimate = new ExportEstimate(frames);
-  $('export-eta').textContent = formatRemaining(null);
+  function renderExportProgress() {
+    if (exportJob !== job) return;
+    const now = performance.now(), metrics = estimate.metrics(now, buffer.sampleRate);
+    setText($('export-elapsed'), formatElapsed((now - job.startedAt) / 1000));
+    setText($('export-speed'), job.finishing ? '—' : formatSpeed(metrics.speed));
+    setText($('export-eta'), job.finishing ? '最後寫入中…' : formatRemaining(metrics.remaining));
+  }
+  renderExportProgress();
+  job.timer = setInterval(renderExportProgress, 500);
   $('export-progress').hidden = false; $('progress-bar').value = 0; $('export-status').textContent = '正在準備匯出…'; updateButtons();
   function fail(message) {
     if (exportJob !== job) return;
@@ -408,7 +528,7 @@ function exportAudio() {
   }
   async function pump() {
     if (exportJob !== job) return;
-    if (partIndex >= parts.length) { $('export-status').textContent = '正在完成檔案…'; $('export-eta').textContent = '最後寫入中…'; worker.postMessage({ type: 'finish' }); return; }
+    if (partIndex >= parts.length) { job.finishing = true; $('export-status').textContent = '正在完成檔案…'; renderExportProgress(); worker.postMessage({ type: 'finish' }); return; }
     try {
       const end = Math.min(parts[partIndex][1], frame + 73728);
       const data = buffer.readChannels ? await buffer.readChannels(frame, end) : Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel).slice(frame, end));
@@ -424,8 +544,7 @@ function exportAudio() {
     if (data.type === 'ready') { estimate.start(performance.now()); pump(); }
     else if (data.type === 'progress') {
       const progress = Math.min(99, Math.floor(data.processed / frames * 100));
-      const now = performance.now(), remaining = estimate.sample(data.processed,now);
-      if (now-lastEstimateAt >= 500) { setText($('export-eta'),formatRemaining(remaining)); lastEstimateAt=now; }
+      estimate.sample(data.processed, performance.now());
       if (lastProgress !== progress) {
         lastProgress = progress;
         $('progress-bar').value = progress; $('export-status').textContent = `正在匯出 ${format.toUpperCase()}… ${progress}%`;
@@ -433,7 +552,8 @@ function exportAudio() {
       // Yield to paint and input before handing the next chunk to the worker.
       setTimeout(pump, 0);
     } else if (data.type === 'complete') {
-      exportJob = null; $('export-progress').hidden = true; $('export-eta').textContent = '';
+      const result = exportResult({ frames, sampleRate: buffer.sampleRate, elapsedMs: performance.now() - job.startedAt, bytes: data.blob.size });
+      clearExportProgress(job); exportJob = null;
       if (job.token !== loadToken) { worker.terminate(); removeExportFile(job.cacheName); return; }
       // Retain only the idle Worker's lock and disk-backed File for re-download.
       // Revoking the download retires its Worker and schedules temporary-file cleanup.
@@ -441,7 +561,16 @@ function exportAudio() {
       savedSignature = job.signature;
       downloadURL = URL.createObjectURL(data.blob);
       const link = $('download-link'); link.href = downloadURL; link.download = name; link.hidden = false;
-      link.click(); updateButtons(); notify('匯出完成！若下載未自動開始，可點選「下載完成的音檔」。');
+      $('result-name').textContent = name;
+      $('result-elapsed').textContent = result.elapsed;
+      $('result-speed').textContent = result.speed;
+      $('result-size').textContent = result.size;
+      $('result-size').title = `${data.blob.size.toLocaleString('zh-TW')} 位元組`;
+      exportPreview = { junctions:exportJunctions(parts, buffer.sampleRate), duration:frames / buffer.sampleRate, selected:-1, renderedSelection:-1 };
+      renderExportJunctions();
+      $('result-audio').src = downloadURL;
+      $('export-result').hidden = false;
+      updateButtons(); notify('匯出完成！可先預聽產出的音檔並查看結果，再按「下載音檔」。');
     } else if (data.type === 'error') fail(data.message);
   };
   worker.onerror = event => { event.preventDefault(); fail('匯出元件載入失敗，請確認網站資源完整後重試。'); };
@@ -492,8 +621,50 @@ document.querySelectorAll('[name="format"]').forEach(input => input.addEventList
 }));
 $('export-button').addEventListener('click', exportAudio);
 $('cancel-export').addEventListener('click', () => cancelExport());
+$('result-audio').addEventListener('play', () => {
+  if (!$('result-audio').paused) pause({ keepExportPreview:true });
+});
+$('result-audio').addEventListener('error', () => {
+  updateExportPreviewPosition();
+  if (downloadURL && $('result-audio').error) $('result-audio-error').hidden = false;
+});
+for (const type of ['loadedmetadata', 'durationchange', 'timeupdate', 'emptied']) {
+  $('result-audio').addEventListener(type, updateExportPreviewPosition);
+}
+$('result-junction-previous').addEventListener('click', () => stepExportJunction('previous'));
+$('result-junction-next').addEventListener('click', () => stepExportJunction('next'));
+$('result-junction-loop').addEventListener('click', () => {
+  if (exportAudition.looping) { exportAudition.stop({ pause:true }); return; }
+  if (exportPreview?.selected >= 0) {
+    const context = exportPreviewContext(), preview = $('result-audio');
+    const window = context && junctionWindow(exportPreview.junctions[exportPreview.selected], context.before, context.after, preview.duration);
+    if (window) exportAudition.start(window, { loop:true });
+  }
+});
+for (const id of ['result-junction-before', 'result-junction-after']) {
+  $(id).addEventListener('change', changeExportPreviewContext);
+  $(id).addEventListener('keydown', event => { if (event.key === 'Enter') event.currentTarget.blur(); });
+}
+$('result-audio-seek').addEventListener('input', event => {
+  const preview = $('result-audio');
+  if (Number.isFinite(preview.duration) && preview.duration > 0 && !preview.error) {
+    exportAudition.stop();
+    if (exportPreview) exportPreview.selected = -1;
+    preview.currentTime = Math.max(0, Math.min(preview.duration, Number(event.target.value)));
+    updateExportPreviewPosition();
+  }
+});
+document.querySelector('.result-preview').addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+      event.target.isContentEditable || event.target.closest('input:not([type="range"]), textarea, select') ||
+      $('export-result').hidden || !exportPreview) return;
+  const target = { '[':'result-junction-previous', ']':'result-junction-next', 'l':'result-junction-loop' }[event.key.toLowerCase()];
+  if (!target) return;
+  event.preventDefault();
+  if (!event.repeat) $(target).click();
+});
 document.addEventListener('keydown', event => {
-  if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select')) return;
+  if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select, audio, .result-preview')) return;
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p' && !wave.drag) {
     event.preventDefault(); if (!event.repeat) previewCurrentJunction(); return;
   }

@@ -35,6 +35,7 @@ async function exportFile(format) {
   await page.locator(`[name="format"][value="${format}"]`).check();
   const pending = page.waitForEvent('download');
   await page.locator('#export-button').click();
+  await page.locator('#download-link').click();
   const download = await pending; const target = path.join(output, `edited.${format}`);
   await download.saveAs(target); return target;
 }

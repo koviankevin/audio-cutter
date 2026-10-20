@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-export const publicFiles = ['index.html','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','export-store.mjs','mp3-encoder.mjs','export-progress.mjs','chunk-source.mjs','stream-core.mjs','decode-worker.js','vendor/WasmMediaEncoder-0.7.0.min.js','vendor/lame-0.7.0.wasm','vendor/wasm-media-encoders-LICENSE.txt','vendor/lame-wasm-LICENSE.txt','vendor/mpg123-decoder.min.js','vendor/mpg123-decoder-LICENSE.txt','vendor/mpg123-LICENSE.txt','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
+export const publicFiles = ['index.html','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','export-store.mjs','mp3-encoder.mjs','export-progress.mjs','media-window.mjs','chunk-source.mjs','stream-core.mjs','decode-worker.js','vendor/WasmMediaEncoder-0.7.0.min.js','vendor/lame-0.7.0.wasm','vendor/wasm-media-encoders-LICENSE.txt','vendor/lame-wasm-LICENSE.txt','vendor/mpg123-decoder.min.js','vendor/mpg123-decoder-LICENSE.txt','vendor/mpg123-LICENSE.txt','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 export async function startServer({ port = 4173, base = '/', publicRoot = process.env.PUBLIC_ROOT } = {}) {
   const servedRoot = publicRoot ? path.resolve(root, publicRoot) : root;

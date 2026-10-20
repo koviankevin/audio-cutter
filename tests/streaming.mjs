@@ -209,6 +209,7 @@ try {
   await page.locator('[name="format"][value="wav"]').check();
   const downloadPromise = page.waitForEvent('download');
   await page.locator('#export-button').click();
+  await page.locator('#download-link').click();
   const download = await downloadPromise;
   const wavTarget = path.join(out, 'edited.wav');
   await download.saveAs(wavTarget);
@@ -274,6 +275,7 @@ try {
     await page.locator('[name="format"][value="mp3"]').check();
     const next = page.waitForEvent('download');
     await page.locator('#export-button').click();
+    await page.locator('#download-link').click();
     const result = await next;
     const output = path.join(out, `reencoded-${path.basename(target)}`);
     await result.saveAs(output);

@@ -43,6 +43,8 @@ jobs:
         run: npm run test:mp3-export
       - name: OPFS cancellation, quota errors and cleanup
         run: npm run test:export-lifecycle
+      - name: Completed MP3/WAV preview, joins, shortcuts and manual download
+        run: npm run test:export-preview
       - name: Streaming decode, playback and export
         run: npm run test:streaming
       - name: Upload browser evidence
