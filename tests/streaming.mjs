@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
 import { wavHeader } from '../pcm.mjs';
 import { workerMemory } from './worker-memory.mjs';
+import { runtimeInfo } from './runtime-info.mjs';
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright'
 );
@@ -95,7 +96,7 @@ await page.addInitScript(() => {
     buffered: false,
   });
 });
-const report = { channel: process.env.BROWSER_CHANNEL || 'chrome' };
+const report = { channel: process.env.BROWSER_CHANNEL || 'chrome', runtime: runtimeInfo(browser) };
 async function select(a, b) {
   await page.evaluate(
     ([a, b]) => {

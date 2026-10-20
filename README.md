@@ -96,9 +96,10 @@ node scripts/serve.mjs
 ## 測試
 
 ```sh
-node --test tests/core.test.mjs
-npm install
-npx playwright install chromium
+npm ci
+npm test
+npx playwright install --with-deps chromium
+export BROWSER_CHANNEL=chromium
 npm run test:browser
 npm run test:streaming
 npm run test:export-memory
@@ -108,7 +109,7 @@ npm run test:mp3-speed
 npm run test:export-preview
 ```
 
-瀏覽器測試使用自己產生的音調資料，涵蓋多段剪輯、MP3/WAV 實際下載與解碼、左右聲道、播放與取消、錯誤檔案、鍵盤、子路徑及沒有音訊網路傳輸。需要測試已安裝的 Chrome／Edge 時可指定 `BROWSER_CHANNEL=chrome` 或 `BROWSER_CHANNEL=msedge`；`LONG_AUDIO=1` 另外測試 29 分鐘單聲道錄音。
+瀏覽器測試使用自己產生的音調資料，涵蓋多段剪輯、MP3/WAV 實際下載與解碼、左右聲道、播放與取消、錯誤檔案、鍵盤、子路徑及沒有音訊網路傳輸。CI 使用鎖定版本 Playwright 安裝的 Chromium，以上指令以 `BROWSER_CHANNEL=chromium` 選取它。測試腳本原本的預設值為已安裝的 Chrome；需要測試已安裝的 Chrome／Edge 時可指定 `BROWSER_CHANNEL=chrome` 或 `BROWSER_CHANNEL=msedge`；`LONG_AUDIO=1` 另外測試 29 分鐘單聲道錄音。
 
 `tests/streaming.mjs` 另驗證 90 秒 WAV／MP3 的實際分段讀取、48 kHz 重採樣、跨段預聽、逐樣本 WAV 匯出、單／雙聲道 MP3 再匯出、取消與換檔暫存清理、其他分頁的暫存鎖，以及 Worker 記憶體。`LONG_AUDIO=1` 額外驗證約 28.5 分鐘立體聲 MP3；首次產生測試 MP3 較久，後續會重用合成測試檔。輸出僅存於 `test-results/`。
 
@@ -161,7 +162,23 @@ Edge 的約 28.5 分鐘立體聲 MP3 分段解碼約 13.6 秒，約 576 MiB PCM 
 
 在 GitHub 儲存庫 **Settings → Pages → Build and deployment → Source** 選擇 **GitHub Actions**。
 
-推送至 `main` 後，工作流程先執行核心測試，再以 `node scripts/package.mjs` 把公開資源複製到 `dist/`，最後部署到 GitHub Pages。部署只包含網站資源，不包含測試輸出或音檔。所有資源及 Worker 使用相對網址，可部署於 `/audio-cutter/` 子路徑。
+PR 與 `main` 更新都會執行 `.github/workflows/pages.yml`，分別顯示兩個驗收工作：
+
+| 狀態 | 驗證內容 | 是否阻擋部署 |
+| --- | --- | --- |
+| Core tests | 原有 `tests/core.test.mjs` 入口（包含其匯入的串流、儲存與進度測試） | 是 |
+| Chromium export acceptance | 原有 MP3／WASM、JavaScript 備援、取消後重新匯出、OPFS 生命週期、匯出摘要／手動下載、成品預聽／接點／快捷鍵與串流瀏覽器測試 | 是 |
+| Long audio export measurements | 另行手動執行的 60 秒音調編碼、29 分鐘 WAV／MP3 完整匯出及保留記憶體量測 | 否；不等同上述短音檔驗收 |
+
+瀏覽器工作在 Ubuntu 安裝鎖定的 npm 依賴與 Chromium／Linux 系統套件，先打包，再以 `PUBLIC_ROOT=dist` 對 `/audio-cutter/` 子路徑執行真實瀏覽器測試；WASM、JavaScript 編碼器與解碼器都取自打包內的 `vendor/`，不依賴外部 CDN。MP3 測試會明確斷言使用 WASM，另強制停用 WASM 驗證 JavaScript 備援。OPFS 測試若無法存取儲存空間會失敗，不會當成「已清理」。
+
+`deploy` 明確依賴兩個驗收工作成功，僅在 `main` 的 push 或手動執行時部署同次已測試的 Pages artifact。PR 只驗收、不部署；取消、失敗或跳過驗收均不會部署。不同 PR 使用不同 concurrency 群組，不會取消正式分支的驗收。
+
+瀏覽器 JSON／截圖證據以 `browser-export-<commit>` artifact 保留 14 天。需要長音檔數據時，在 Actions 選擇 **Long audio export measurements → Run workflow**，其 JSON 以 `export-measurements-<commit>` 保留 30 天；包含提交、瀏覽器／Node／作業系統／CPU、音檔類型及測試長度，沒有音訊檔。這個流程沿用 `tests/mp3-speed.mjs` 與 `tests/export-memory.mjs`，保留檔案輸出與有界記憶體的正確性斷言，不設定 `MP3_MAX_MS`，不以固定毫秒數判定效能退步。
+
+長音檔記憶體報告為約 85% 與完成時 GC 後的保留量，另記錄 WASM 線性記憶體；不代表峰值、瀏覽器磁碟快取或整個程序用量。合成音調／靜音結果只描述該次 runner，不能保證所有裝置或真實音檔的速度。只有實際執行該工作後，才算有該提交的長音檔驗證結果。
+
+部署只包含網站資源，不包含測試輸出或音檔。所有資源及 Worker 使用相對網址，可部署於 `/audio-cutter/` 子路徑。
 
 ## 技術與授權
 

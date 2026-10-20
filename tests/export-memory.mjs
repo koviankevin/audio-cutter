@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
 import { workerMemory } from './worker-memory.mjs';
+import { runtimeInfo } from './runtime-info.mjs';
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright'
 );
@@ -68,6 +69,8 @@ try {
   const heap = await workerMemory(browser, 'export-worker.js');
   assert.equal(heap.length, 1);
   const report = {
+    runtime: runtimeInfo(browser),
+    fixture: 'synthetic stereo silence, 44.1 kHz',
     seconds,
     format,
     processed: await page.evaluate(() => window.exportAudit.processed),

@@ -2,30 +2,68 @@ name: Test and publish to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  test-and-package:
+  core:
+    name: Core tests
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Test editing and PCM encoding
-        run: node --test tests/core.test.mjs
-      - name: Package public files only
+      - run: npm test
+  browser-export:
+    name: Chromium export acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BROWSER_CHANNEL: chromium
+      PUBLIC_ROOT: dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install pinned Chromium and Linux dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Package public files including local encoder resources
         run: node scripts/package.mjs
-      - uses: actions/configure-pages@v5
+      - name: MP3 WASM, JavaScript fallback, cancel and re-export
+        run: npm run test:mp3-export
+      - name: OPFS cancellation, quota errors and cleanup
+        run: npm run test:export-lifecycle
+      - name: Completed MP3/WAV preview, joins, shortcuts and manual download
+        run: npm run test:export-preview
+      - name: Streaming decode, playback and export
+        run: npm run test:streaming
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-export-${{ github.sha }}
+          path: |
+            test-results/**/*.json
+            test-results/**/*.png
+          if-no-files-found: warn
+          retention-days: 14
       - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           path: dist
   deploy:
-    needs: test-and-package
+    needs: [core, browser-export]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -34,6 +72,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy
+      - uses: actions/configure-pages@v5
+      - name: Deploy tested artifact
         id: deployment
         uses: actions/deploy-pages@v4

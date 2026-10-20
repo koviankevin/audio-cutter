@@ -1,0 +1,51 @@
+name: Long audio export measurements
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: export-performance-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  measure:
+    name: Synthetic long audio (not a release gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BROWSER_CHANNEL: chromium
+      PUBLIC_ROOT: dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/package.mjs
+      - name: 60-second stereo tone encoding (no millisecond threshold)
+        run: npm run test:mp3-speed
+        env:
+          PERF_LABEL: tone-60s
+      - name: 29-minute WAV complete export and retained memory
+        run: npm run test:export-memory
+        env:
+          EXPORT_SECONDS: '1740'
+          EXPORT_FORMAT: wav
+          EXPORT_COMPLETE: '1'
+          PERF_LABEL: wav-29m
+      - name: 29-minute MP3 complete export and retained memory
+        run: npm run test:export-memory
+        env:
+          EXPORT_SECONDS: '1740'
+          EXPORT_FORMAT: mp3
+          EXPORT_COMPLETE: '1'
+          PERF_LABEL: mp3-29m
+      - name: Upload measurements (no audio fixtures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-measurements-${{ github.sha }}
+          path: test-results/**/*.json
+          if-no-files-found: warn
+          retention-days: 30
