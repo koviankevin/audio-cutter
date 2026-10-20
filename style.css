@@ -16,3 +16,7 @@
 #loop-junction[aria-pressed="true"]{background:var(--teal);border-color:var(--teal);color:#fff}#loop-junction[aria-pressed="true"] kbd{color:#fff;border-color:#ffffff70}
 
 .export-eta { margin: .5rem 0 0; color: var(--muted, #677b75); font-size: .78rem; font-variant-numeric: tabular-nums; }
+.export-stats { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: .65rem 0 0; font-size: .75rem; color: var(--muted, #677b75); }
+.export-stats dt { margin-bottom: .2rem; }
+.export-stats dd { margin: 0; color: var(--ink); font-size: .9rem; font-variant-numeric: tabular-nums; }
+.export-speed-help { margin: .4rem 0 0; color: var(--muted, #677b75); font-size: .7rem; }

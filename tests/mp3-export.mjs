@@ -34,12 +34,30 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('dialog', (d) => d.accept());
 const original = await readFile('export-worker.js', 'utf8');
 const slow =
-  "const post=self.postMessage.bind(self);self.postMessage=(data,...rest)=>data.type==='progress'?setTimeout(()=>post(data,...rest),50):post(data,...rest);\n";
+  "const post=self.postMessage.bind(self);self.postMessage=(data,...rest)=>setTimeout(()=>post(data,...rest),data.type==='ready'?1600:data.type==='complete'?2200:data.type==='progress'?50:0);\n";
+async function assertCleared() {
+  for (const id of ['export-eta', 'export-elapsed', 'export-speed'])
+    assert.equal(await page.locator(`#${id}`).textContent(), '');
+  assert.equal(await page.evaluate(() => window.exportTimers.size), 0, 'export timers must be released');
+}
 try {
   await context.route('**/export-worker.js', (route) =>
     route.fulfill({ contentType: 'text/javascript', body: slow + original }),
   );
   await page.addInitScript(() => {
+    const interval = window.setInterval.bind(window),
+      clear = window.clearInterval.bind(window);
+    window.exportTimers = new Set();
+    window.setInterval = (...args) => {
+      const id = interval(...args);
+      // Ignore browser/test-runner housekeeping timers in the same window.
+      if (args[0]?.name === 'renderExportProgress') window.exportTimers.add(id);
+      return id;
+    };
+    window.clearInterval = (id) => {
+      window.exportTimers.delete(id);
+      clear(id);
+    };
     const Native = window.Worker;
     window.encoders = [];
     window.Worker = class extends Native {
@@ -57,7 +75,13 @@ try {
   await page.locator('#workspace').waitFor({ state: 'visible' });
   await page.locator('#export-button').click();
   assert.match(await page.locator('#export-eta').textContent(), /估算/);
+  assert.equal(await page.locator('#export-elapsed').textContent(), '00:00');
+  assert.equal(await page.locator('#export-speed').textContent(), '計算中…');
+  assert.equal(await page.evaluate(() => window.exportTimers.size), 1);
+  await page.waitForFunction(() => document.getElementById('export-elapsed').textContent === '00:01');
+  assert.equal(await page.locator('#export-status').textContent(), '正在準備匯出…');
   await page.waitForFunction(() => /預估剩餘 \d/.test(document.getElementById('export-eta').textContent));
+  assert.match(await page.locator('#export-speed').textContent(), /^\d+\.\d×$/);
   assert.doesNotMatch(await page.locator('#export-eta').textContent(), /NaN|Infinity|剩餘 0 秒/);
   await page.screenshot({ path: path.join(output, 'eta-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -65,14 +89,26 @@ try {
   await page.screenshot({ path: path.join(output, 'eta-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.locator('#cancel-export').click();
-  assert.equal(await page.locator('#export-eta').textContent(), '');
+  await assertCleared();
+  await page.waitForTimeout(600);
+  await assertCleared();
   await page.locator('#export-button').click();
   assert.match(await page.locator('#export-eta').textContent(), /估算/);
+  assert.equal(await page.locator('#export-elapsed').textContent(), '00:00');
+  assert.equal(await page.locator('#export-speed').textContent(), '計算中…');
   const done = page.waitForEvent('download');
+  await page.waitForFunction(() => document.getElementById('export-eta').textContent === '最後寫入中…');
+  assert.equal(await page.locator('#export-speed').textContent(), '—');
+  const finalElapsed = await page.locator('#export-elapsed').textContent();
+  await page.waitForFunction(
+    (before) => document.getElementById('export-elapsed').textContent !== before,
+    finalElapsed,
+  );
+  assert.equal(await page.locator('#export-eta').textContent(), '最後寫入中…');
   const download = await done;
   const target = path.join(output, 'wasm.mp3');
   await download.saveAs(target);
-  assert.equal(await page.locator('#export-eta').textContent(), '');
+  await assertCleared();
   assert.equal(await page.locator('#export-progress').isVisible(), false);
   assert.equal(await page.evaluate(() => window.encoders.at(-1)), 'wasm', 'Chrome and Edge must use the fast encoder');
   async function validate(target) {
@@ -86,27 +122,25 @@ try {
     assert.ok(sync >= 0);
     assert.equal(bytes[sync + 2] >> 4, 11, 'MPEG1 layer III must remain 192 kbps');
     assert.equal((bytes[sync + 2] >> 2) & 3, 0, 'output remains 44.1 kHz');
-    return page.evaluate(
-      async (bytes) => {
-        const ctx = new AudioContext({ sampleRate: 44100 });
-        try {
-          const data = await ctx.decodeAudioData(new Uint8Array(bytes).buffer);
-          return {
-            duration: data.duration,
-            channels: data.numberOfChannels,
-            crossings: Array.from({ length: data.numberOfChannels }, (_, c) => {
-              const samples = data.getChannelData(c);
-              let count = 0;
-              for (let i = 44101; i < 88200; i++) if (samples[i - 1] < 0 && samples[i] >= 0) count++;
-              return count;
-            }),
-          };
-        } finally {
-          await ctx.close();
-        }
-      },
-      [...bytes],
-    );
+    return page.evaluate(async (base64) => {
+      const ctx = new AudioContext({ sampleRate: 44100 });
+      try {
+        const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+        const data = await ctx.decodeAudioData(bytes.buffer);
+        return {
+          duration: data.duration,
+          channels: data.numberOfChannels,
+          crossings: Array.from({ length: data.numberOfChannels }, (_, c) => {
+            const samples = data.getChannelData(c);
+            let count = 0;
+            for (let i = 44101; i < 88200; i++) if (samples[i - 1] < 0 && samples[i] >= 0) count++;
+            return count;
+          }),
+        };
+      } finally {
+        await ctx.close();
+      }
+    }, bytes.toString('base64'));
   }
   const audio = await validate(target);
   assert.ok(Math.abs(audio.duration - 90) < 0.1);
@@ -125,9 +159,25 @@ try {
   const compatibility = await validate(fallbackPath);
   assert.ok(Math.abs(compatibility.duration - 90) < 0.1);
   compatibility.crossings.forEach((n, c) => assert.ok(Math.abs(n - (c ? 880 : 440)) <= 1));
+  await assertCleared();
+  await context.unroute('**/export-worker.js');
+  await context.route('**/export-worker.js', (route) =>
+    route.fulfill({
+      contentType: 'text/javascript',
+      body: "self.onmessage=()=>setTimeout(()=>self.postMessage({type:'error',message:'測試匯出錯誤'}),1600);",
+    }),
+  );
+  await page.locator('#export-button').click();
+  await page.waitForFunction(() => document.getElementById('export-elapsed').textContent === '00:01');
+  await page.waitForFunction(() => document.getElementById('notice').textContent.includes('測試匯出錯誤'));
+  await assertCleared();
+  await page.locator('#export-button').click();
+  await page.locator('#file-input').setInputFiles(file);
+  await page.waitForFunction(() => document.getElementById('export-progress').hidden);
+  await assertCleared();
   assert.deepEqual(errors, []);
   console.log(
-    `PASS ${channel}: WASM 192 kbps stereo, ETA warm-up/update/reset/cancel, disk-backed download, and JavaScript fallback`,
+    `PASS ${channel}: WASM 192 kbps stereo, elapsed/speed/ETA including preparation and final write, timer cleanup on cancel/failure/replacement/completion, mobile layout, and JavaScript fallback`,
   );
 } finally {
   await context.close();

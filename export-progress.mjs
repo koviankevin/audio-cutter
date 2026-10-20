@@ -34,6 +34,42 @@ export class ExportEstimate {
         : Math.max(0, (this.total - processed) / this.rate / 1000);
     return this.remaining;
   }
+
+  metrics(now, sampleRate) {
+    if (
+      this.startedAt === null ||
+      !Number.isFinite(now) ||
+      now - this.startedAt < 1000 ||
+      now < this.lastAt ||
+      !(sampleRate > 0) ||
+      !Number.isFinite(sampleRate) ||
+      !this.processed ||
+      !(this.rate > 0)
+    )
+      return { speed: null, remaining: null };
+    // Account for time without acknowledgements too: stalled reads or disk writes
+    // should lower the displayed speed, not leave an old fast measurement frozen.
+    const rate = this.rate * Math.exp(-(now - this.lastAt) / 2500);
+    return {
+      speed: (rate * 1000) / sampleRate,
+      remaining: rate > 0 ? (this.total - this.processed) / rate / 1000 : null,
+    };
+  }
+}
+
+export function formatElapsed(value) {
+  const seconds = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  const hours = Math.floor(seconds / 3600),
+    minutes = Math.floor((seconds % 3600) / 60),
+    tail = seconds % 60;
+  const mmss = `${String(minutes).padStart(2, '0')}:${String(tail).padStart(2, '0')}`;
+  return hours ? `${String(hours).padStart(2, '0')}:${mmss}` : mmss;
+}
+
+export function formatSpeed(value) {
+  if (value === null || !Number.isFinite(value) || value < 0) return '計算中…';
+  if (value > 0 && value < 0.1) return '< 0.1×';
+  return `${value.toFixed(1)}×`;
 }
 
 export function formatRemaining(value) {

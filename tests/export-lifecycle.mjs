@@ -37,6 +37,11 @@ async function waitFiles(count) {
     }
   }, count);
 }
+async function assertProgressCleared() {
+  assert.equal(await page.locator('#export-progress').isVisible(), false);
+  for (const id of ['export-elapsed', 'export-speed', 'export-eta'])
+    assert.equal(await page.locator(`#${id}`).textContent(), '');
+}
 async function exportWav(target = page) {
   const pending = target.waitForEvent('download');
   await target.locator('[name="format"][value="wav"]').check();
@@ -68,6 +73,7 @@ try {
   await page.locator('#export-button').click();
   await page.waitForFunction(() => document.getElementById('notice').textContent.includes('已取消匯出'));
   await waitFiles(0);
+  await assertProgressCleared();
   assert.equal(await page.locator('#original-duration').textContent(), '00:18.000');
   // Inject a real storage failure into the Worker boundary after its first disk write.
   const original = await readFile('export-worker.js', 'utf8');
@@ -81,9 +87,11 @@ try {
   await page.locator('#export-button').click();
   await page.waitForFunction(() => document.getElementById('notice').textContent.includes('暫存空間不足'));
   await waitFiles(0);
+  await assertProgressCleared();
   assert.equal(await page.locator('#export-button').isEnabled(), true);
   await context.unroute('**/export-worker.js');
   const first = await exportWav();
+  await assertProgressCleared();
   await waitFiles(1);
   const active = (await files()).find((n) => !n.endsWith('.done'));
   const again = page.waitForEvent('download');
