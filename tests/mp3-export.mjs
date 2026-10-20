@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, open, readFile } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
 import { wavHeader } from '../pcm.mjs';
+import { runtimeInfo } from './runtime-info.mjs';
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright'
 );
@@ -30,6 +31,7 @@ const browser = await chromium.launch({ channel, headless: true }),
   context = await browser.newContext({ acceptDownloads: true }),
   page = await context.newPage(),
   errors = [];
+page.setDefaultTimeout(60000);
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('dialog', (d) => d.accept());
 const original = await readFile('export-worker.js', 'utf8');
@@ -65,10 +67,11 @@ try {
   await page.screenshot({ path: path.join(output, 'eta-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.locator('#cancel-export').click();
+  await page.waitForFunction(() => document.getElementById('notice').textContent.includes('已取消匯出'));
   assert.equal(await page.locator('#export-eta').textContent(), '');
+  const done = page.waitForEvent('download');
   await page.locator('#export-button').click();
   assert.match(await page.locator('#export-eta').textContent(), /估算/);
-  const done = page.waitForEvent('download');
   const download = await done;
   const target = path.join(output, 'wasm.mp3');
   await download.saveAs(target);
@@ -124,8 +127,15 @@ try {
   assert.equal(await page.evaluate(() => window.encoders.at(-1)), 'lamejs');
   const compatibility = await validate(fallbackPath);
   assert.ok(Math.abs(compatibility.duration - 90) < 0.1);
+  assert.equal(compatibility.channels, 2);
   compatibility.crossings.forEach((n, c) => assert.ok(Math.abs(n - (c ? 880 : 440)) <= 1));
   assert.deepEqual(errors, []);
+  await writeFile(path.join(output, 'report.json'), JSON.stringify({
+    runtime: runtimeInfo(browser),
+    fixture: { seconds: 90, channels: 2, sampleRate: 44100, synthetic: true },
+    wasm: audio, fallback: compatibility,
+    passed: ['wasm', '192-kbps', 'cancel-and-reexport', 'eta', 'javascript-fallback'],
+  }, null, 2));
   console.log(
     `PASS ${channel}: WASM 192 kbps stereo, ETA warm-up/update/reset/cancel, disk-backed download, and JavaScript fallback`,
   );

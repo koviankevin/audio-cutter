@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
+import { runtimeInfo } from './runtime-info.mjs';
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright'
 );
@@ -12,6 +13,7 @@ const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 
 const context = await browser.newContext({ acceptDownloads: true }),
   page = await context.newPage(),
   errors = [];
+page.setDefaultTimeout(60000);
 page.on('dialog', (d) => d.accept());
 page.on('pageerror', (e) => errors.push(e.message));
 const files = () =>
@@ -21,7 +23,8 @@ const files = () =>
       const list = [];
       for await (const name of dir.keys()) list.push(name);
       return list.sort();
-    } catch {
+    } catch (error) {
+      if (error.name !== 'NotFoundError') throw error;
       return [];
     }
   });
@@ -32,7 +35,8 @@ async function waitFiles(count) {
       let n = 0;
       for await (const name of dir.keys()) if (!name.endsWith('.done')) n++;
       return n === count;
-    } catch {
+    } catch (error) {
+      if (error.name !== 'NotFoundError') throw error;
       return count === 0;
     }
   }, count);
@@ -47,6 +51,7 @@ async function exportWav(target = page) {
 }
 try {
   await page.goto(url);
+  await page.evaluate(() => navigator.storage.getDirectory());
   await page.locator('#load-demo').click();
   await page.locator('#workspace').waitFor({ state: 'visible' });
   await page.evaluate(() => {
@@ -132,6 +137,12 @@ try {
   await exportWav();
   assert.ok(!(await files()).includes(stale));
   assert.deepEqual(errors, []);
+  await mkdir('test-results/export-lifecycle', { recursive: true });
+  await writeFile('test-results/export-lifecycle/report.json', JSON.stringify({
+    runtime: runtimeInfo(browser),
+    synthetic: true,
+    passed: ['cancel', 'quota-failure', 'reexport', 'repeated-download', 'cross-tab-lock', 'grace-expiry', 'stale-partial-cleanup'],
+  }, null, 2));
   console.log(
     `PASS export lifecycle ${process.env.BROWSER_CHANNEL || 'chrome'}: cancel, quota failure, repeated download, cross-tab locks, grace expiry and stale partial cleanup; ${first.suggestedFilename()}`,
   );

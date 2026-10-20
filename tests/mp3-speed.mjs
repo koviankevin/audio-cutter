@@ -3,6 +3,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startServer } from '../scripts/serve.mjs';
+import { runtimeInfo } from './runtime-info.mjs';
 const { chromium } = await import(
   process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright'
 );
@@ -64,6 +65,8 @@ try {
       }),
     seconds,
   );
+  report.runtime = runtimeInfo(browser);
+  report.fixture = 'synthetic stereo tones, 44.1 kHz';
   await mkdir('test-results/mp3-speed', { recursive: true });
   await writeFile(
     path.resolve(`test-results/mp3-speed/${process.env.PERF_LABEL || 'current'}.json`),
