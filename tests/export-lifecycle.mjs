@@ -46,8 +46,13 @@ async function exportWav(target = page) {
   const pending = target.waitForEvent('download');
   await target.locator('[name="format"][value="wav"]').check();
   await target.locator('#export-button').click();
+  await target.locator('#export-result').waitFor({ state: 'visible' });
+  assert.match(await target.locator('#result-name').textContent(), /\.wav$/);
+  const summary = await target.locator('#export-result').textContent();
+  await target.locator('#download-link').click();
   const download = await pending;
   assert.equal(await download.failure(), null);
+  assert.equal(await target.locator('#export-result').textContent(), summary);
   return download;
 }
 try {
@@ -112,6 +117,10 @@ try {
   await page.locator('#selection-end').fill('2');
   await page.locator('#selection-end').press('Enter');
   await page.locator('#add-deletion').click();
+  assert.equal(await page.locator('#export-result').isVisible(), false);
+  assert.equal(await page.locator('#download-link').isVisible(), false);
+  for (const id of ['result-name', 'result-elapsed', 'result-speed', 'result-size'])
+    assert.equal(await page.locator(`#${id}`).textContent(), '');
   await page.waitForFunction(async () => {
     const { held } = await navigator.locks.query();
     return !held.some((l) => l.name.startsWith('yin-jian-export-'));

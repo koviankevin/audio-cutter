@@ -72,6 +72,17 @@ export function formatSpeed(value) {
   return `${value.toFixed(1)}×`;
 }
 
+export function exportResult({ frames, sampleRate, elapsedMs, bytes }) {
+  const seconds = elapsedMs / 1000;
+  const rounded = Math.round(seconds * 10);
+  const elapsed = seconds < 0.1 ? '< 0.1 秒' : `${formatElapsed(rounded / 10)}.${rounded % 10}`;
+  const speed = seconds > 0 ? formatSpeed(frames / sampleRate / seconds) : '—';
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  const unit = Math.min(3, Math.max(0, Math.floor(Math.log2(Math.max(1, bytes)) / 10)));
+  const size = `${unit ? (bytes / 1024 ** unit).toFixed(2) : bytes} ${units[unit]}`;
+  return { elapsed, speed, size };
+}
+
 export function formatRemaining(value) {
   if (value === null || !Number.isFinite(value) || value < 0) return '正在估算剩餘時間…';
   const seconds = Math.max(1, Math.ceil(value)),

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed } from '../export-progress.mjs';
+import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed, exportResult } from '../export-progress.mjs';
 
 test('remaining time warms up and includes source and disk delays in real elapsed time', () => {
   const estimate = new ExportEstimate(10000);
@@ -66,4 +66,26 @@ test('elapsed and speed formatting handles long jobs, slow jobs and invalid meas
   assert.equal(formatSpeed(0), '0.0×');
   assert.equal(formatSpeed(0.001), '< 0.1×');
   for (const value of [null, -1, NaN, Infinity]) assert.equal(formatSpeed(value), '計算中…');
+});
+
+test('completed summary averages the retained audio over the whole job, including preparation and flush', () => {
+  assert.deepEqual(exportResult({ frames: 90 * 44100, sampleRate: 44100, elapsedMs: 15000, bytes: 2161058 }), {
+    elapsed: '00:15.0',
+    speed: '6.0×',
+    size: '2.06 MiB',
+  });
+  assert.equal(exportResult({ frames: 48000, sampleRate: 48000, elapsedMs: 2000, bytes: 44 }).speed, '0.5×');
+});
+
+test('completed summary preserves subsecond times, hour rollover and actual byte sizes', () => {
+  const result = (elapsedMs, bytes) => exportResult({ frames: 44100, sampleRate: 44100, elapsedMs, bytes });
+  assert.equal(result(32, 0).elapsed, '< 0.1 秒');
+  assert.equal(result(345, 1).elapsed, '00:00.3');
+  assert.equal(result(59999, 1023).elapsed, '01:00.0');
+  assert.equal(result(3599999, 1024).elapsed, '01:00:00.0');
+  assert.equal(result(1000, 1023).size, '1023 B');
+  assert.equal(result(1000, 1024).size, '1.00 KiB');
+  assert.equal(result(1000, 1024 ** 2).size, '1.00 MiB');
+  assert.equal(result(1000, 1024 ** 3).size, '1.00 GiB');
+  assert.equal(result(1000, 0).size, '0 B');
 });

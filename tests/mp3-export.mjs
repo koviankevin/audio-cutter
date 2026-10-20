@@ -32,6 +32,8 @@ const browser = await chromium.launch({ channel, headless: true }),
   errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('dialog', (d) => d.accept());
+let downloads = 0;
+page.on('download', () => downloads++);
 const original = await readFile('export-worker.js', 'utf8');
 const slow =
   "const post=self.postMessage.bind(self);self.postMessage=(data,...rest)=>setTimeout(()=>post(data,...rest),data.type==='ready'?1600:data.type==='complete'?2200:data.type==='progress'?50:0);\n";
@@ -63,10 +65,13 @@ try {
     window.Worker = class extends Native {
       constructor(...args) {
         super(...args);
-        if (String(args[0]).endsWith('/export-worker.js'))
+        if (String(args[0]).endsWith('/export-worker.js')) {
+          window.exportStartedAt = performance.now();
           this.addEventListener('message', ({ data }) => {
             if (data.type === 'ready') window.encoders.push(data.encoder);
+            if (data.type === 'complete') window.exportFinishedAt = performance.now();
           });
+        }
       }
     };
   });
@@ -90,6 +95,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.locator('#cancel-export').click();
   await assertCleared();
+  assert.equal(await page.locator('#export-result').isVisible(), false);
   await page.waitForTimeout(600);
   await assertCleared();
   await page.locator('#export-button').click();
@@ -105,9 +111,36 @@ try {
     finalElapsed,
   );
   assert.equal(await page.locator('#export-eta').textContent(), '最後寫入中…');
+  await page.locator('#export-result').waitFor({ state: 'visible' });
+  await assertCleared();
+  const summary = await page.locator('#export-result').textContent();
+  assert.match(await page.locator('#result-name').textContent(), /\.mp3$/);
+  const actualSeconds = await page.evaluate(() => (window.exportFinishedAt - window.exportStartedAt) / 1000);
+  const shownElapsed = await page.locator('#result-elapsed').textContent();
+  const elapsedParts = shownElapsed.split(':').map(Number);
+  const shownSeconds = elapsedParts.reduce((sum, part) => sum * 60 + part, 0);
+  assert.ok(Math.abs(shownSeconds - actualSeconds) < 0.2, 'summary must include preparation and final-write delay');
+  const average = parseFloat(await page.locator('#result-speed').textContent());
+  assert.ok(Math.abs(average - 90 / actualSeconds) < 0.2, 'average must use the entire job duration');
+  await page.screenshot({ path: path.join(output, 'result-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: path.join(output, 'result-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForTimeout(600);
+  assert.equal(downloads, 0, 'allow reviewing the result before choosing to download');
+  assert.equal(await page.locator('#export-result').textContent(), summary, 'completed metrics must stop changing');
+  await page.locator('#download-link').click();
   const download = await done;
   const target = path.join(output, 'wasm.mp3');
   await download.saveAs(target);
+  const outputBytes = (await readFile(target)).length;
+  assert.equal(
+    await page.locator('#result-size').getAttribute('title'),
+    `${outputBytes.toLocaleString('zh-TW')} 位元組`,
+  );
+  assert.equal(await page.locator('#result-size').textContent(), `${(outputBytes / 1024 ** 2).toFixed(2)} MiB`);
+  assert.equal(await page.locator('#export-result').textContent(), summary, 'downloading must retain the summary');
   await assertCleared();
   assert.equal(await page.locator('#export-progress').isVisible(), false);
   assert.equal(await page.evaluate(() => window.encoders.at(-1)), 'wasm', 'Chrome and Edge must use the fast encoder');
@@ -152,6 +185,9 @@ try {
   );
   const fallbackDone = page.waitForEvent('download');
   await page.locator('#export-button').click();
+  assert.equal(await page.locator('#export-result').isVisible(), false);
+  assert.equal(await page.locator('#result-size').textContent(), '');
+  await page.locator('#download-link').click();
   const fallback = await fallbackDone;
   const fallbackPath = path.join(output, 'fallback.mp3');
   await fallback.saveAs(fallbackPath);
@@ -171,13 +207,15 @@ try {
   await page.waitForFunction(() => document.getElementById('export-elapsed').textContent === '00:01');
   await page.waitForFunction(() => document.getElementById('notice').textContent.includes('測試匯出錯誤'));
   await assertCleared();
+  assert.equal(await page.locator('#export-result').isVisible(), false);
   await page.locator('#export-button').click();
   await page.locator('#file-input').setInputFiles(file);
   await page.waitForFunction(() => document.getElementById('export-progress').hidden);
   await assertCleared();
+  assert.equal(await page.locator('#export-result').isVisible(), false);
   assert.deepEqual(errors, []);
   console.log(
-    `PASS ${channel}: WASM 192 kbps stereo, elapsed/speed/ETA including preparation and final write, timer cleanup on cancel/failure/replacement/completion, mobile layout, and JavaScript fallback`,
+    `PASS ${channel}: MP3 codecs, live progress, retained total/average/actual size before manual download, frozen metrics after download, result reset and cleanup, desktop/mobile`,
   );
 } finally {
   await context.close();

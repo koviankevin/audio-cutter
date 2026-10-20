@@ -2,7 +2,7 @@ import { SAMPLE_RATE, MAX_BYTES, MAX_SECONDS, History, totalFrames, signature, n
 import { AudioEngine, makePeaks, createDemo } from './audio.mjs';
 import { Waveform } from './waveform.mjs';
 import { removeExportFile, retireExportFile } from './export-store.mjs';
-import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed } from './export-progress.mjs';
+import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed, exportResult } from './export-progress.mjs';
 
 const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -58,6 +58,9 @@ function revokeDownload() {
     retireExportFile(downloadResource); downloadResource = null;
   }
   downloadURL = null; $('download-link').hidden = true; $('download-link').removeAttribute('href');
+  $('export-result').hidden = true;
+  for (const id of ['result-name', 'result-elapsed', 'result-speed', 'result-size']) $(id).textContent = '';
+  $('result-size').removeAttribute('title');
 }
 function updateButtons() {
   const loaded = !!engine.buffer && !isLoading;
@@ -446,6 +449,7 @@ function exportAudio() {
       // Yield to paint and input before handing the next chunk to the worker.
       setTimeout(pump, 0);
     } else if (data.type === 'complete') {
+      const result = exportResult({ frames, sampleRate: buffer.sampleRate, elapsedMs: performance.now() - job.startedAt, bytes: data.blob.size });
       clearExportProgress(job); exportJob = null;
       if (job.token !== loadToken) { worker.terminate(); removeExportFile(job.cacheName); return; }
       // Retain only the idle Worker's lock and disk-backed File for re-download.
@@ -454,7 +458,13 @@ function exportAudio() {
       savedSignature = job.signature;
       downloadURL = URL.createObjectURL(data.blob);
       const link = $('download-link'); link.href = downloadURL; link.download = name; link.hidden = false;
-      link.click(); updateButtons(); notify('匯出完成！若下載未自動開始，可點選「下載完成的音檔」。');
+      $('result-name').textContent = name;
+      $('result-elapsed').textContent = result.elapsed;
+      $('result-speed').textContent = result.speed;
+      $('result-size').textContent = result.size;
+      $('result-size').title = `${data.blob.size.toLocaleString('zh-TW')} 位元組`;
+      $('export-result').hidden = false;
+      updateButtons(); notify('匯出完成！可查看本次結果，再按「下載音檔」。');
     } else if (data.type === 'error') fail(data.message);
   };
   worker.onerror = event => { event.preventDefault(); fail('匯出元件載入失敗，請確認網站資源完整後重試。'); };

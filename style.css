@@ -20,3 +20,8 @@
 .export-stats dt { margin-bottom: .2rem; }
 .export-stats dd { margin: 0; color: var(--ink); font-size: .9rem; font-variant-numeric: tabular-nums; }
 .export-speed-help { margin: .4rem 0 0; color: var(--muted, #677b75); font-size: .7rem; }
+.export-result { margin-top: 14px; padding: 12px; background: var(--mint); border: 1px solid var(--line); border-radius: 8px; }
+.export-result h3 { margin: 0; color: var(--teal); font-size: .85rem; }
+.result-name { margin: .4rem 0 .8rem; font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+.export-result .export-stats { gap: .8rem .5rem; }
+.export-result .result-file-size { grid-column: 1 / -1; }
