@@ -113,7 +113,7 @@ try {
   assert.equal(await page.locator('#export-eta').textContent(), '最後寫入中…');
   await page.locator('#export-result').waitFor({ state: 'visible' });
   await assertCleared();
-  const summary = await page.locator('#export-result').textContent();
+  const summary = await page.locator('#export-result > .export-stats').textContent();
   assert.match(await page.locator('#result-name').textContent(), /\.mp3$/);
   const actualSeconds = await page.evaluate(() => (window.exportFinishedAt - window.exportStartedAt) / 1000);
   const shownElapsed = await page.locator('#result-elapsed').textContent();
@@ -129,7 +129,11 @@ try {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.waitForTimeout(600);
   assert.equal(downloads, 0, 'allow reviewing the result before choosing to download');
-  assert.equal(await page.locator('#export-result').textContent(), summary, 'completed metrics must stop changing');
+  assert.equal(
+    await page.locator('#export-result > .export-stats').textContent(),
+    summary,
+    'completed metrics must stop changing',
+  );
   await page.locator('#download-link').click();
   const download = await done;
   const target = path.join(output, 'wasm.mp3');
@@ -140,7 +144,11 @@ try {
     `${outputBytes.toLocaleString('zh-TW')} 位元組`,
   );
   assert.equal(await page.locator('#result-size').textContent(), `${(outputBytes / 1024 ** 2).toFixed(2)} MiB`);
-  assert.equal(await page.locator('#export-result').textContent(), summary, 'downloading must retain the summary');
+  assert.equal(
+    await page.locator('#export-result > .export-stats').textContent(),
+    summary,
+    'downloading must retain the summary',
+  );
   await assertCleared();
   assert.equal(await page.locator('#export-progress').isVisible(), false);
   assert.equal(await page.evaluate(() => window.encoders.at(-1)), 'wasm', 'Chrome and Edge must use the fast encoder');

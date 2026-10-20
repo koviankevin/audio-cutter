@@ -53,6 +53,12 @@ function notify(message, error = false) {
 }
 function clearNotice() { $('notice').hidden = true; }
 function revokeDownload() {
+  const preview = $('result-audio');
+  if (preview.hasAttribute('src')) {
+    preview.pause(); preview.removeAttribute('src'); preview.load();
+    updateExportPreviewPosition();
+  }
+  $('result-audio-error').hidden = true;
   if (downloadURL) URL.revokeObjectURL(downloadURL);
   if (downloadResource) {
     retireExportFile(downloadResource); downloadResource = null;
@@ -238,10 +244,19 @@ function applyPendingDeletions() {
   commit(next, { clearPending:true });
   notify(`已一次刪除 ${count} 段，剩下的音訊已依原始順序合併。按「復原」可全部還原。`);
 }
-function pause({ keepJunctionLoop = false } = {}) {
+function pause({ keepJunctionLoop = false, keepExportPreview = false } = {}) {
+  if (!keepExportPreview) $('result-audio').pause();
   playingRequest++; cursor = engine.pause(); junctionPlayback = null;
   if (!keepJunctionLoop) junctionLoop = false;
   cancelAnimationFrame(animation); updatePlaybackUI(); updateButtons();
+}
+function updateExportPreviewPosition() {
+  const preview = $('result-audio'), seek = $('result-audio-seek');
+  const duration = Number.isFinite(preview.duration) && !preview.error ? preview.duration : 0;
+  const position = Math.min(duration, Math.max(0, preview.currentTime || 0));
+  seek.disabled = !(duration > 0); seek.max = duration; seek.value = position;
+  const label = `${formatElapsed(position)} / ${duration > 0 ? formatElapsed(duration) : '--:--'}`;
+  setText($('result-audio-position'), label); setAttribute(seek, 'aria-valuetext', label);
 }
 function updatePlaybackUI() {
   // Read/draw before changing text, so cursor animation doesn't force a layout.
@@ -463,8 +478,9 @@ function exportAudio() {
       $('result-speed').textContent = result.speed;
       $('result-size').textContent = result.size;
       $('result-size').title = `${data.blob.size.toLocaleString('zh-TW')} 位元組`;
+      $('result-audio').src = downloadURL;
       $('export-result').hidden = false;
-      updateButtons(); notify('匯出完成！可查看本次結果，再按「下載音檔」。');
+      updateButtons(); notify('匯出完成！可先預聽產出的音檔並查看結果，再按「下載音檔」。');
     } else if (data.type === 'error') fail(data.message);
   };
   worker.onerror = event => { event.preventDefault(); fail('匯出元件載入失敗，請確認網站資源完整後重試。'); };
@@ -515,8 +531,25 @@ document.querySelectorAll('[name="format"]').forEach(input => input.addEventList
 }));
 $('export-button').addEventListener('click', exportAudio);
 $('cancel-export').addEventListener('click', () => cancelExport());
+$('result-audio').addEventListener('play', () => {
+  if (!$('result-audio').paused) pause({ keepExportPreview:true });
+});
+$('result-audio').addEventListener('error', () => {
+  updateExportPreviewPosition();
+  if (downloadURL && $('result-audio').error) $('result-audio-error').hidden = false;
+});
+for (const type of ['loadedmetadata', 'durationchange', 'timeupdate', 'emptied']) {
+  $('result-audio').addEventListener(type, updateExportPreviewPosition);
+}
+$('result-audio-seek').addEventListener('input', event => {
+  const preview = $('result-audio');
+  if (Number.isFinite(preview.duration) && preview.duration > 0 && !preview.error) {
+    preview.currentTime = Math.max(0, Math.min(preview.duration, Number(event.target.value)));
+    updateExportPreviewPosition();
+  }
+});
 document.addEventListener('keydown', event => {
-  if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select')) return;
+  if (!engine.buffer || isLoading || $('replace-dialog').open || event.isComposing || event.target.isContentEditable || event.target.closest('input, textarea, select, audio')) return;
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p' && !wave.drag) {
     event.preventDefault(); if (!event.repeat) previewCurrentJunction(); return;
   }

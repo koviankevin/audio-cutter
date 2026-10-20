@@ -25,3 +25,12 @@
 .result-name { margin: .4rem 0 .8rem; font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
 .export-result .export-stats { gap: .8rem .5rem; }
 .export-result .result-file-size { grid-column: 1 / -1; }
+.result-preview { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.result-preview h4 { margin: 0 0 8px; color: var(--ink); font-size: .8rem; font-weight: 500; }
+.result-preview audio { display: block; width: 100%; max-width: 100%; min-width: 0; height: 40px; }
+.result-preview p { margin: 8px 0 0; color: var(--muted); font-size: .7rem; line-height: 1.6; }
+.result-preview .result-audio-error { color: var(--red); }
+.result-seek-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-top: 8px; }
+.result-seek-heading label { margin: 0; font-size: .7rem; }
+.result-seek-heading output { color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
+#result-audio-seek { display: block; width: 100%; margin: 6px 0 0; accent-color: var(--teal); }

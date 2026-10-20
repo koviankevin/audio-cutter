@@ -48,11 +48,11 @@ async function exportWav(target = page) {
   await target.locator('#export-button').click();
   await target.locator('#export-result').waitFor({ state: 'visible' });
   assert.match(await target.locator('#result-name').textContent(), /\.wav$/);
-  const summary = await target.locator('#export-result').textContent();
+  const summary = await target.locator('#export-result > .export-stats').textContent();
   await target.locator('#download-link').click();
   const download = await pending;
   assert.equal(await download.failure(), null);
-  assert.equal(await target.locator('#export-result').textContent(), summary);
+  assert.equal(await target.locator('#export-result > .export-stats').textContent(), summary);
   return download;
 }
 try {
