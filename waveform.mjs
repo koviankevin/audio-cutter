@@ -8,7 +8,10 @@ export class Waveform {
     this.onSelection = onSelection; this.onSeek = onSeek; this.onAddSelection = onAddSelection;
     this.onEditPending = onEditPending;
     this.zoom = 1; this.scroll = 0; this.playhead = 0;
-    this.observer = new ResizeObserver(() => this.draw()); this.observer.observe(canvas);
+    this.labelSize = 14;
+    const updateLabelSize = () => { this.labelSize = parseFloat(getComputedStyle(canvas).fontSize) * .875; this.draw(); };
+    this.observer = new ResizeObserver(updateLabelSize); this.observer.observe(canvas);
+    window.addEventListener('font-size-change', updateLabelSize);
     canvas.addEventListener('pointerdown', event => this.pointerDown(event));
     canvas.addEventListener('pointermove', event => this.pointerMove(event));
     canvas.addEventListener('pointerup', event => this.pointerUp(event));
@@ -190,7 +193,7 @@ export class Waveform {
     if (this.canvas.width !== Math.round(width * dpr) || this.canvas.height !== Math.round(height * dpr)) {
       this.canvas.width = Math.round(width * dpr); this.canvas.height = Math.round(height * dpr);
     }
-    const key = JSON.stringify([width, height, dpr, this.zoom, this.scroll, this.ranges, this.selection, this.pending]);
+    const key = JSON.stringify([width, height, dpr, this.labelSize, this.zoom, this.scroll, this.ranges, this.selection, this.pending]);
     if (this.backgroundKey !== key) {
       this.background.width = this.canvas.width; this.background.height = this.canvas.height;
       const background = this.background.getContext('2d'); background.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -211,10 +214,11 @@ export class Waveform {
     const selectedStart = Math.max(0, xOf(this.selection[0]));
     const selectedEnd = Math.min(width, xOf(this.selection[1]));
     if (selectedEnd > selectedStart) { ctx.fillStyle = '#e7f1e6'; ctx.fillRect(selectedStart, top, selectedEnd - selectedStart, bottom - top); }
-    ctx.font = '14px "Segoe UI", sans-serif'; ctx.textBaseline = 'middle';
+    ctx.font = `${this.labelSize}px "Segoe UI", sans-serif`; ctx.textBaseline = 'middle';
     const viewSeconds = this.viewLength / this.sampleRate;
     const intervals = [.01,.02,.05,.1,.2,.5,1,2,5,10,15,30,60,120,300,600];
-    const step = intervals.find(value => value >= viewSeconds / Math.max(2, Math.floor(width / 100))) ?? 600;
+    const labelWidth = ctx.measureText(formatTime((this.viewStart + this.viewLength) / this.sampleRate, true)).width + 24;
+    const step = intervals.find(value => value >= viewSeconds / Math.max(1, Math.floor(width / Math.max(100, labelWidth)))) ?? 600;
     const startSeconds = this.viewStart / this.sampleRate;
     for (let seconds = Math.ceil(startSeconds / step) * step; seconds <= startSeconds + viewSeconds; seconds += step) {
       const x = xOf(seconds * this.sampleRate);
@@ -255,7 +259,7 @@ export class Waveform {
       ctx.strokeStyle = '#bd914e'; ctx.lineWidth = 1; ctx.strokeRect(left + .5, top + .5, right - left - 1, bottom - top - 1);
       const label = `待刪 ${String(index + 1).padStart(2, '0')}`;
       if (right - left > ctx.measureText(label).width + 12) {
-        ctx.fillStyle = '#795622'; ctx.font = '14px "Segoe UI", sans-serif'; ctx.textAlign = 'left';
+        ctx.fillStyle = '#795622'; ctx.textAlign = 'left';
         ctx.fillText(label, left + 6, top + 11);
       }
     }
@@ -279,6 +283,6 @@ export class Waveform {
         ctx.moveTo(left + 5, middle - 7); ctx.lineTo(left + 5, middle + 7); ctx.stroke();
       }
     }
-    ctx.textAlign = 'right'; ctx.fillStyle = '#536b61'; ctx.font = '14px "Segoe UI", sans-serif'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - 10);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#536b61'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - 10);
   }
 }

@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#167d72">
   <meta name="description" content="音剪：在瀏覽器內快速剪輯音檔，預聽多段剪輯結果並匯出 MP3 或 WAV。音檔不離開你的裝置。">
   <title>音剪 — 留下想聽的部分</title>
+  <script src="./preferences.js"></script>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.mjs"></script>
@@ -31,6 +32,16 @@
       <a class="brand" href="./" aria-label="音剪首頁"><span class="brand-mark"><svg><use href="#i-scissors"/></svg></span><strong>音剪<span class="brand-dot">.</span></strong><span class="brand-en">AUDIO CUTTER</span></a>
       <div class="header-right"><span class="local-badge"><span></span> 在你的裝置上處理</span><a href="https://github.com/koviankevin/audio-cutter" target="_blank" rel="noopener noreferrer" class="source-link">GitHub <span aria-hidden="true">↗</span></a></div>
     </header>
+
+    <div class="reading-settings">
+      <span id="font-size-label">字體大小</span>
+      <div class="font-size-options" role="radiogroup" aria-labelledby="font-size-label">
+        <label><input type="radio" name="font-size" value="standard" checked><span>標準</span></label>
+        <label><input type="radio" name="font-size" value="large"><span>大字</span></label>
+        <label><input type="radio" name="font-size" value="extra-large"><span>特大字</span></label>
+      </div>
+      <p id="font-size-storage-note" role="status" hidden>此瀏覽器無法儲存設定，僅套用於本次開啟。</p>
+    </div>
 
     <main>
       <section class="intro">

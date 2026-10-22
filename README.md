@@ -4,6 +4,8 @@
 
 ## 使用
 
+頁面上方可切換「標準／大字／特大字」，分別為原字級的 100%／112.5%／125%，包含波形時間標示。設定僅以 `localStorage` 保存在目前瀏覽器，下次開啟自動套用；同一網站的其他分頁也會同步。若瀏覽器禁止儲存，仍可切換，並提示設定僅適用本次開啟。字級切換不影響音檔、剪輯紀錄或匯出結果。
+
 1. 拖放或選擇 MP3、WAV，也可先按「示範音檔」。
 2. 在波形上拖曳選段、拖動選段邊界，或輸入起點與終點。時間格式為 `01:23.456`，也接受秒數，例如 `83.456`。
 3. 「刪除選段」剪去選取部分；「只保留選段」留下目前仍存在且位於選段內的音訊。可以連續操作，刪除過的聲音不會因再次選段而復活。
@@ -107,6 +109,7 @@ npm run test:export-lifecycle
 npm run test:mp3-export
 npm run test:mp3-speed
 npm run test:export-preview
+npm run test:font-size
 ```
 
 瀏覽器測試使用自己產生的音調資料，涵蓋多段剪輯、MP3/WAV 實際下載與解碼、左右聲道、播放與取消、錯誤檔案、鍵盤、子路徑及沒有音訊網路傳輸。CI 使用鎖定版本 Playwright 安裝的 Chromium，以上指令以 `BROWSER_CHANNEL=chromium` 選取它。測試腳本原本的預設值為已安裝的 Chrome；需要測試已安裝的 Chrome／Edge 時可指定 `BROWSER_CHANNEL=chrome` 或 `BROWSER_CHANNEL=msedge`；`LONG_AUDIO=1` 另外測試 29 分鐘單聲道錄音。
