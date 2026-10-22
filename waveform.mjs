@@ -211,16 +211,17 @@ export class Waveform {
     const selectedStart = Math.max(0, xOf(this.selection[0]));
     const selectedEnd = Math.min(width, xOf(this.selection[1]));
     if (selectedEnd > selectedStart) { ctx.fillStyle = '#e7f1e6'; ctx.fillRect(selectedStart, top, selectedEnd - selectedStart, bottom - top); }
-    ctx.font = '9px "Segoe UI", sans-serif'; ctx.textBaseline = 'middle';
+    ctx.font = '14px "Segoe UI", sans-serif'; ctx.textBaseline = 'middle';
     const viewSeconds = this.viewLength / this.sampleRate;
     const intervals = [.01,.02,.05,.1,.2,.5,1,2,5,10,15,30,60,120,300,600];
-    const step = intervals.find(value => value >= viewSeconds / Math.max(2, Math.floor(width / 83))) ?? 600;
+    const step = intervals.find(value => value >= viewSeconds / Math.max(2, Math.floor(width / 100))) ?? 600;
     const startSeconds = this.viewStart / this.sampleRate;
     for (let seconds = Math.ceil(startSeconds / step) * step; seconds <= startSeconds + viewSeconds; seconds += step) {
       const x = xOf(seconds * this.sampleRate);
       ctx.strokeStyle = '#e8eee3'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + .5, top); ctx.lineTo(x + .5, bottom); ctx.stroke();
-      ctx.fillStyle = '#94a58a'; ctx.textAlign = x < 27 ? 'left' : x > width - 27 ? 'right' : 'center';
-      ctx.fillText(formatTime(seconds, step < 1), Math.max(5, Math.min(width - 5, x)), 15);
+      const label = formatTime(seconds, step < 1), edge = ctx.measureText(label).width / 2 + 5;
+      ctx.fillStyle = '#536b61'; ctx.textAlign = x < edge ? 'left' : x > width - edge ? 'right' : 'center';
+      ctx.fillText(label, Math.max(5, Math.min(width - 5, x)), 15);
     }
     ctx.strokeStyle = '#dce7d7'; ctx.beginPath(); ctx.moveTo(0, middle + .5); ctx.lineTo(width, middle + .5); ctx.stroke();
     const bins = this.peaks.length / 2;
@@ -252,9 +253,10 @@ export class Waveform {
       if (right <= left) continue;
       ctx.fillStyle = '#dba0472d'; ctx.fillRect(left, top, right - left, bottom - top);
       ctx.strokeStyle = '#bd914e'; ctx.lineWidth = 1; ctx.strokeRect(left + .5, top + .5, right - left - 1, bottom - top - 1);
-      if (right - left > 45) {
-        ctx.fillStyle = '#95692a'; ctx.font = '9px "Segoe UI", sans-serif'; ctx.textAlign = 'left';
-        ctx.fillText(`待刪 ${String(index + 1).padStart(2, '0')}`, left + 6, top + 11);
+      const label = `待刪 ${String(index + 1).padStart(2, '0')}`;
+      if (right - left > ctx.measureText(label).width + 12) {
+        ctx.fillStyle = '#795622'; ctx.font = '14px "Segoe UI", sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(label, left + 6, top + 11);
       }
     }
     if (selectedEnd > selectedStart) {
@@ -277,6 +279,6 @@ export class Waveform {
         ctx.moveTo(left + 5, middle - 7); ctx.lineTo(left + 5, middle + 7); ctx.stroke();
       }
     }
-    ctx.textAlign = 'right'; ctx.fillStyle = '#9aac94'; ctx.font = '8px "Segoe UI", sans-serif'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - 10);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#536b61'; ctx.font = '14px "Segoe UI", sans-serif'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - 10);
   }
 }
