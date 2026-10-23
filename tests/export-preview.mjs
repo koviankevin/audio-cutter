@@ -196,7 +196,7 @@ try {
       await page.evaluate(async (staleCompletion) => {
         const audio = document.getElementById('result-audio');
         const loop = document.getElementById('result-junction-loop');
-        const settled = new Promise((resolve) => {
+        const stopRapidly = () => new Promise((resolve) => {
           let sawSeeking = false;
           const seeking = () => { sawSeeking = true; };
           const seeked = () => {
@@ -207,13 +207,20 @@ try {
           };
           audio.addEventListener('seeking', seeking);
           audio.addEventListener('seeked', seeked);
+          loop.click();
+          loop.click();
         });
-        loop.click();
-        // Force the completion of a previous seek to arrive before the new
-        // seek's queued seeking event. Native seeked has no seek identifier.
-        if (staleCompletion) audio.dispatchEvent(new Event('seeked'));
-        loop.click();
-        await settled;
+        if (staleCompletion) {
+          // Start/stop a new loop just before the previous native seeked
+          // reaches the player's listener. All events are real media events.
+          await new Promise((resolve) => {
+            audio.addEventListener('seeked', () => {
+              loop.click(); // stop the first loop
+              stopRapidly().then(resolve);
+            }, { capture: true, once: true });
+            loop.click();
+          });
+        } else await stopRapidly();
       }, staleCompletion);
       assert.equal(await loop.getAttribute('aria-pressed'), 'false');
       assert.equal(await player.evaluate((a) => a.paused), true);
