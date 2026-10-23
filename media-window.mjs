@@ -11,6 +11,7 @@ export class MediaWindowPlayer {
     this.timer = null;
     this.version = 0;
     this.seekTarget = null;
+    this.pendingSeekEvents = 0;
     audio.addEventListener('play', () => {
       this.completed = false;
       if (this.window && audio.currentTime >= this.window.end) this.seek(this.window.start);
@@ -24,14 +25,24 @@ export class MediaWindowPlayer {
     for (const type of ['timeupdate', 'ratechange', 'ended']) audio.addEventListener(type, () => this.schedule());
     audio.addEventListener('seeking', () => {
       this.clearTimer();
-      if (this.seekTarget !== null && Math.abs(audio.currentTime - this.seekTarget) < 0.05) return;
+      if (this.seekTarget !== null && Math.abs(audio.currentTime - this.seekTarget) < 0.05) {
+        this.pendingSeekEvents = Math.max(0, this.pendingSeekEvents - 1);
+        return;
+      }
+      this.seekTarget = null;
+      this.pendingSeekEvents = 0;
       this.stop();
       this.onManualSeek();
     });
     audio.addEventListener('seeked', () => {
-      this.seekTarget = null;
+      // A previous seek's completion can arrive after a newer seek started.
+      if (!this.pendingSeekEvents && !audio.seeking) this.seekTarget = null;
       this.schedule();
       this.onChange();
+    });
+    audio.addEventListener('emptied', () => {
+      this.seekTarget = null;
+      this.pendingSeekEvents = 0;
     });
     audio.addEventListener('error', () => this.stop());
   }
@@ -41,6 +52,7 @@ export class MediaWindowPlayer {
   }
   seek(time) {
     this.seekTarget = time;
+    this.pendingSeekEvents++;
     this.audio.currentTime = time;
   }
   play() {
@@ -69,9 +81,8 @@ export class MediaWindowPlayer {
     this.version++;
     this.window = null;
     this.looping = false;
-    // Native seeking/seeked events are queued. A stop may arrive before our
-    // own seeking event; keep its target until seeked so it is not a user seek.
-    if (!this.audio.seeking) this.seekTarget = null;
+    // seeking can already be false while owned seeking events are still queued.
+    if (!this.pendingSeekEvents && !this.audio.seeking) this.seekTarget = null;
     if (pause) this.audio.pause();
     this.onChange();
   }
