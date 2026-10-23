@@ -39,6 +39,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Package public files including local encoder resources
         run: node scripts/package.mjs
+      - name: Font sizes, persistence, cross-tab sync and responsive layouts
+        run: npm run test:font-size
       - name: MP3 WASM, JavaScript fallback, cancel and re-export
         run: npm run test:mp3-export
       - name: OPFS cancellation, quota errors and cleanup
