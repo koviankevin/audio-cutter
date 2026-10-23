@@ -1,0 +1,28 @@
+name: Investigate queued loop events
+on:
+  push:
+    branches: [diagnose/rapid-loop-events]
+permissions:
+  contents: read
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BROWSER_CHANNEL: chromium
+      PUBLIC_ROOT: dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/package.mjs
+      - run: node tests/investigate-loop.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: loop-event-trace
+          path: test-results/export-preview-chromium/*.json
