@@ -235,3 +235,26 @@ test('overlapping owned seeks survive old completions but an intervening user se
     assert.equal(player.timer, null);
   } finally { player.stop({ pause: true }); }
 });
+
+test('replacing a media resource retires undelivered owned events', () => {
+  let manual = 0;
+  const audio = new QueuedMedia(),
+    player = new MediaWindowPlayer(audio, { onManualSeek: () => manual++ });
+  try {
+    player.start({ start: 3, end: 5 }, { loop: true });
+    player.stop({ pause: true });
+    // load() cancels old media tasks and emits emptied for the retired source.
+    audio.events = [];
+    audio.seeking = false;
+    audio.dispatchEvent(new Event('emptied'));
+    player.start({ start: 1, end: 2 }, { loop: true });
+    player.stop({ pause: true });
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(manual, 0);
+    audio.currentTime = 1;
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(manual, 1, 'a user seek after the new source settles must not inherit stale ownership');
+  } finally { player.stop({ pause: true }); }
+});
