@@ -1,0 +1,23 @@
+name: Reproduce native queued completion
+on:
+  push:
+    branches: [diagnose/native-queued-completion]
+permissions:
+  contents: read
+jobs:
+  before:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BROWSER_CHANNEL: chromium
+      PUBLIC_ROOT: dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/package.mjs
+      - run: node tests/export-preview.mjs
