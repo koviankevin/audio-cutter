@@ -143,3 +143,118 @@ test('stopping before an owned seek event arrives preserves selection but later 
     player.stop({ pause: true });
   }
 });
+
+// Native media state changes and queued DOM events are separate. Unlike Media,
+// let each test choose when decoding finishes and when each event is delivered.
+class QueuedMedia extends Media {
+  events = [];
+  get currentTime() { return this.position; }
+  set currentTime(value) {
+    this.position = value;
+    this.seeking = true;
+    this.events.push('seeking');
+  }
+  completeSeek() {
+    this.seeking = false;
+    this.events.push('timeupdate', 'seeked');
+  }
+  deliver() { this.dispatchEvent(new Event(this.events.shift())); }
+  flush() { while (this.events.length) this.deliver(); }
+}
+
+test('a completed seek with undelivered events remains owned after a rapid loop stop', () => {
+  let selected = 1;
+  const audio = new QueuedMedia(),
+    player = new MediaWindowPlayer(audio, { onManualSeek: () => selected = -1 });
+  try {
+    player.start({ start: 3, end: 5 }, { loop: true });
+    audio.completeSeek();
+    player.stop({ pause: true });
+    audio.flush();
+    assert.equal(selected, 1, 'rapid loop stop must retain its selected join');
+    assert.equal(audio.paused, true);
+    assert.equal(player.window, null);
+    assert.equal(player.timer, null);
+    audio.currentTime = 6;
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(selected, -1, 'later native/user seeking still clears selection');
+  } finally { player.stop({ pause: true }); }
+});
+
+test('an older queued seeked cannot retire a newer owned seek before its seeking event', () => {
+  let selected = 1;
+  const audio = new QueuedMedia(),
+    player = new MediaWindowPlayer(audio, { onManualSeek: () => selected = -1 });
+  try {
+    player.start({ start: 1, end: 2 }, { loop: true });
+    audio.deliver(); // first seeking
+    audio.completeSeek(); // first timeupdate and seeked remain queued
+    player.start({ start: 3, end: 5 }, { loop: true });
+    player.stop({ pause: true });
+    audio.flush(); // old seeked arrives before the second seeking
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(selected, 1, 'a stale completion must not turn an owned seek into a user seek');
+    assert.equal(audio.paused, true);
+    assert.equal(player.timer, null);
+    audio.currentTime = 6;
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(selected, -1);
+  } finally { player.stop({ pause: true }); }
+});
+
+test('overlapping owned seeks survive old completions but an intervening user seek exits', () => {
+  let manual = 0;
+  const audio = new QueuedMedia(),
+    player = new MediaWindowPlayer(audio, { onManualSeek: () => manual++ });
+  try {
+    player.start({ start: 1, end: 2 }, { loop: true });
+    audio.completeSeek();
+    player.start({ start: 3, end: 5 }, { loop: true });
+    player.stop({ pause: true });
+    audio.flush();
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(manual, 0, 'both queued seeking events belong to the latest owned position');
+
+    player.start({ start: 1, end: 2 }, { loop: true });
+    audio.deliver();
+    audio.completeSeek();
+    player.start({ start: 3, end: 5 }, { loop: true });
+    audio.deliver(); // old timeupdate
+    audio.deliver(); // old seeked while the new seek is still in progress
+    audio.deliver(); // new seeking
+    audio.currentTime = 6; // genuine native user seek before completion
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(manual, 1);
+    assert.equal(player.window, null);
+    assert.equal(player.looping, false);
+    assert.equal(player.timer, null);
+  } finally { player.stop({ pause: true }); }
+});
+
+test('replacing a media resource retires undelivered owned events', () => {
+  let manual = 0;
+  const audio = new QueuedMedia(),
+    player = new MediaWindowPlayer(audio, { onManualSeek: () => manual++ });
+  try {
+    player.start({ start: 3, end: 5 }, { loop: true });
+    player.stop({ pause: true });
+    // load() cancels old media tasks and emits emptied for the retired source.
+    audio.events = [];
+    audio.seeking = false;
+    audio.dispatchEvent(new Event('emptied'));
+    player.start({ start: 1, end: 2 }, { loop: true });
+    player.stop({ pause: true });
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(manual, 0);
+    audio.currentTime = 1;
+    audio.completeSeek();
+    audio.flush();
+    assert.equal(manual, 1, 'a user seek after the new source settles must not inherit stale ownership');
+  } finally { player.stop({ pause: true }); }
+});

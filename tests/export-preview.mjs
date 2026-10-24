@@ -190,16 +190,72 @@ try {
     await page.keyboard.press('l');
     assert.equal(await loop.getAttribute('aria-pressed'), 'false');
     assert.equal(await player.evaluate((a) => a.paused), true);
-    // Stop in the same turn as start, before the native owned seek is delivered.
-    await page.evaluate(() => {
-      const loop = document.getElementById('result-junction-loop');
-      loop.click();
-      loop.click();
-    });
-    await page.waitForFunction(() => !document.getElementById('result-audio').seeking);
-    assert.equal(await loop.getAttribute('aria-pressed'), 'false');
-    assert.equal(await player.evaluate((a) => a.paused), true);
-    assert.equal(await markers.nth(1).getAttribute('aria-pressed'), 'true', 'rapid loop stop must retain its selected join');
+    // Wait for delivered media events, not just the seeking property: it may
+    // become false before the seeking/seeked DOM tasks have run.
+    const rapidLoopEvidence = [];
+    async function rapidLoopStop(staleCompletion = false) {
+      const evidence = await page.evaluate(async (staleCompletion) => {
+        const audio = document.getElementById('result-audio');
+        const loop = document.getElementById('result-junction-loop');
+        const events = [];
+        const record = (event) => events.push({
+          type: event.type, trusted: event.isTrusted, seeking: audio.seeking,
+          paused: audio.paused, time: audio.currentTime,
+          selected: document.querySelectorAll('#result-junction-markers button')[1].getAttribute('aria-pressed'),
+        });
+        audio.addEventListener('seeking', record);
+        audio.addEventListener('seeked', record);
+        const stopRapidly = () => new Promise((resolve) => {
+          let sawSeeking = false;
+          const seeking = () => { sawSeeking = true; };
+          const seeked = () => {
+            if (!sawSeeking || audio.seeking) return;
+            audio.removeEventListener('seeking', seeking);
+            audio.removeEventListener('seeked', seeked);
+            resolve();
+          };
+          audio.addEventListener('seeking', seeking);
+          audio.addEventListener('seeked', seeked);
+          loop.click();
+          loop.click();
+        });
+        let timeout;
+        try {
+          await Promise.race([
+            (async () => {
+              if (staleCompletion) {
+                // Start/stop a new loop just before the previous native seeked
+                // reaches the player's listener. All events are real media events.
+                await new Promise((resolve) => {
+                  audio.addEventListener('seeked', () => {
+                    loop.click(); // stop the first loop
+                    stopRapidly().then(resolve);
+                  }, { capture: true, once: true });
+                  loop.click();
+                });
+              } else await stopRapidly();
+            })(),
+            new Promise((resolve, reject) => {
+              timeout = setTimeout(() => reject(new Error('native loop seek events did not settle')), 5000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+          audio.removeEventListener('seeking', record);
+          audio.removeEventListener('seeked', record);
+        }
+        return { staleCompletion, events };
+      }, staleCompletion);
+      assert.ok(evidence.events.every((event) => event.trusted), 'controlled order must use native media events');
+      rapidLoopEvidence.push(evidence);
+      await writeFile(path.join(output, `rapid-loop-events-${format}.json`), JSON.stringify(rapidLoopEvidence, null, 2));
+      assert.equal(await loop.getAttribute('aria-pressed'), 'false');
+      assert.equal(await player.evaluate((a) => a.paused), true);
+      assert.equal(await markers.nth(1).getAttribute('aria-pressed'), 'true', 'rapid loop stop must retain its selected join');
+    }
+    await rapidLoopStop();
+    for (let trial = 0; trial < 25; trial++) await rapidLoopStop();
+    await rapidLoopStop(true);
     const selectedStatus = await page.locator('#result-junction-status').textContent();
     for (const modifier of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'isComposing']) {
       assert.equal(
@@ -407,7 +463,7 @@ try {
   await writeFile(path.join(output, 'report.json'), JSON.stringify({
     runtime: runtimeInfo(browser),
     fixture: { seconds: 12, channels: 2, sampleRate: 44100, synthetic: true },
-    passed: ['mp3-wav-native-preview', 'same-download-source', 'no-autoplay-or-auto-download', 'junction-navigation', 'junction-loop', 'rapid-loop-stop', 'keyboard-guards', 'preview-error-download', 'source-retirement', 'no-whole-output-decode', 'no-upload'],
+    passed: ['mp3-wav-native-preview', 'same-download-source', 'no-autoplay-or-auto-download', 'junction-navigation', 'junction-loop', 'rapid-loop-stop', 'queued-seeked-before-seeking', 'keyboard-guards', 'preview-error-download', 'source-retirement', 'no-whole-output-decode', 'no-upload'],
   }, null, 2));
   console.log(
     `PASS ${channel}: MP3/WAV previews, scoped bracket/L shortcuts on panel/audio/slider, repeat/modifier/IME/input guards, first/last/hidden/error/no-join states, custom loops and downloads`,
