@@ -360,7 +360,9 @@ try {
     };
   });
   await page.locator('#file-input').setInputFiles(mp3);
-  await page.waitForFunction(() => document.getElementById('notice').textContent === '已取消載入。');
+  await page.waitForFunction(() => document.getElementById('notice').textContent.includes('已取消載入'));
+  assert.equal(await page.locator('#workspace').isVisible(), true, 'cancel keeps the original WAV workspace');
+  assert.equal(await page.locator('#file-name').textContent(), path.basename(file));
   await page.waitForTimeout(150);
   assert.deepEqual(await cacheNames(), [], 'cancel must remove partial local PCM');
   assert.deepEqual(await page.evaluate(() => window.wholeReads), []);

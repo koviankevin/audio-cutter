@@ -667,8 +667,10 @@ try {
   assert.match(await page.locator('#notice').textContent(),/空的/);
   await page.locator('#file-input').setInputFiles({ name:'broken.wav', mimeType:'audio/wav', buffer:Buffer.from('not a wave') });
   if (await page.locator('#replace-dialog').isVisible()) await page.locator('#replace-dialog button[value="replace"]').click();
-  await page.locator('#import-area').waitFor({ state:'visible', timeout:15000 });
+  await page.waitForFunction(() => document.getElementById('notice').textContent.includes('無法讀取'));
+  assert.equal(await page.locator('#workspace').isVisible(),true,'failed replacement keeps the current workspace');
   assert.match(await page.locator('#notice').textContent(),/無法讀取/);
+  await page.reload();
   await page.locator('#load-demo').click(); await page.locator('#workspace').waitFor({ state:'visible' });
   assert.equal(await page.locator('#original-duration').textContent(),'00:18.000');
   const demoBounds = await page.locator('#waveform').boundingBox();

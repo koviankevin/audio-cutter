@@ -58,6 +58,21 @@ html[data-font-size="extra-large"] { font-size: 125%; }
 .result-shortcuts kbd { font: inherit; border: 1px solid #b7ccc3; border-radius: 3px; padding: 0 3px; color: var(--ink); }
 
 /* Comfortable reading sizes, with enough room for full time values and controls. */
+.project-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin: 0 0 18px; }
+.project-tools > div, .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.project-tools p { margin: 0; color: var(--muted); font-size: .875rem; }
+.project-tools .save-error { color: var(--red); }
+.project-tools .storage-note { flex-basis: 100%; }
+.recovery-card { margin-bottom: 18px; padding: 20px; }
+.recovery-card h2 { margin: 0; font-size: 1.125rem; }
+.recovery-card p { margin: 8px 0 14px; font-size: .875rem; color: var(--muted); overflow-wrap: anywhere; }
+.recovery-card summary { cursor: pointer; font-weight: 600; }
+.recovery-card summary:focus-visible { outline: 3px solid #79bdb1; outline-offset: 4px; }
+.draft-list { list-style: none; padding: 0; margin: 0; }
+.draft-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+.draft-list li > span { flex: 1 1 200px; min-width: 0; }
+.draft-list strong, .draft-list small { display: block; overflow-wrap: anywhere; }
+.draft-list small { font-size: .875rem; color: var(--muted); }
 .reading-settings { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; padding: 16px 0 0; font-size: .875rem; color: var(--muted); }
 .font-size-options { display: flex; flex-wrap: wrap; gap: 4px; }
 .font-size-options label { position: relative; cursor: pointer; }

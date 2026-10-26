@@ -13,8 +13,9 @@
     "test:export-lifecycle": "node tests/export-lifecycle.mjs",
     "test:mp3-speed": "node tests/mp3-speed.mjs",
     "test:mp3-export": "node tests/mp3-export.mjs",
-    "test:export-preview": "node tests/export-preview.mjs",
-    "test:font-size": "node tests/font-size.mjs"
+    "test:export-preview": "node tests/export-preview.mjs && node tests/projects.mjs",
+    "test:font-size": "node tests/font-size.mjs",
+    "test:projects": "node tests/projects.mjs"
   },
   "devDependencies": { "playwright": "1.62.1" },
   "license": "MIT"

@@ -53,6 +53,21 @@
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
+      <section class="project-tools" aria-label="剪輯專案">
+        <div><button id="open-project" class="button subtle small">開啟專案檔</button><button id="save-project" class="button subtle small" disabled>儲存專案檔</button></div>
+        <p id="project-status" role="status">剪輯進度會保存在這個瀏覽器；原始音檔請自行保留。</p>
+        <p id="storage-status" class="storage-note">匯出前會檢查本機暫存；瀏覽器保存不是原始音檔的備份。</p>
+        <input id="project-input" type="file" accept=".json,application/json" hidden>
+      </section>
+      <section id="restore-request" class="card recovery-card" aria-label="選入專案原檔" hidden>
+        <h2>繼續上次的剪輯</h2><p>請選入原始音檔「<strong id="restore-file-name"></strong>」。我們會核對檔案內容後還原，不會上傳音檔。</p>
+        <div class="recovery-actions"><button id="restore-source" class="button primary">選擇原始音檔</button><button id="cancel-restore" class="button subtle">取消還原</button></div>
+      </section>
+      <details id="draft-panel" class="card recovery-card" hidden>
+        <summary>最近的剪輯備份</summary><p>顯示最近 10 份。備份只含剪輯設定；清除瀏覽器資料會一併清除，請另存專案檔並保留原始音檔。</p>
+        <ul id="draft-list" class="draft-list"></ul><button id="more-drafts" class="button subtle small" hidden>顯示更多備份</button>
+      </details>
+
       <section id="import-area" class="import-area" aria-label="匯入音檔">
         <div class="drop-lines" aria-hidden="true"></div>
         <div class="upload-icon"><svg><use href="#i-upload"/></svg></div>

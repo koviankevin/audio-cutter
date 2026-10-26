@@ -4,6 +4,9 @@ import { Waveform } from './waveform.mjs';
 import { removeExportFile, retireExportFile } from './export-store.mjs';
 import { ExportEstimate, formatRemaining, formatElapsed, formatSpeed, exportResult } from './export-progress.mjs';
 import { MediaWindowPlayer } from './media-window.mjs';
+import { ProjectSession } from './project-session.mjs';
+import { fingerprintFile, sameSource, validateProject } from './project.mjs';
+import { checkStorage, exportBytes } from './storage-check.mjs';
 
 const $ = id => document.getElementById(id);
 const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -26,7 +29,10 @@ let pendingEdit = null;
 let junctionPlayback = null;
 let junctionLoop = false;
 let segmentsKey = null;
+let restoreRequest = null, exportPreparation = null, loadFallback = null;
 const wave = new Waveform($('waveform'), value => setSelection(value), value => seek(value), () => addPendingSelection(true), editPendingRange);
+const projects = new ProjectSession({ snapshot:projectSnapshot, restore:requestRestore, notify });
+checkStorage().then(result => { $('storage-status').textContent = `${result.label} · 容量為估計值`; }).catch(error => { $('storage-status').textContent = error.message; });
 const ranges = () => keptRanges;
 const outputRanges = () => subtractMany(ranges(), pendingDeletions);
 const normalizedPending = () => normalize(pendingDeletions.flatMap(part => intersect(ranges(), part)), engine.buffer?.length ?? 0);
@@ -36,12 +42,61 @@ const seconds = frames => frames / (engine.buffer?.sampleRate || SAMPLE_RATE);
 function captureState() {
   return structuredClone({ ranges:keptRanges, pending:pendingDeletions, selection, cursor });
 }
+function projectSnapshot() {
+  if (!engine.buffer || isLoading) return null;
+  const state = pendingEdit ? structuredClone(pendingEdit.before) : captureState();
+  const states = structuredClone(history.states); states[history.index] = structuredClone(state);
+  const before = Number($('result-junction-before').value), after = Number($('result-junction-after').value);
+  const validContext = [before, after].every(n => Number.isFinite(n) && n >= 0 && n <= 30) && before + after > 0;
+  return {
+    audio:{ sampleRate:engine.buffer.sampleRate, length:engine.buffer.length, channels:engine.buffer.numberOfChannels },
+    state, history:{ states, index:history.index },
+    preferences:{ name:$('export-name').value, format:document.querySelector('[name="format"]:checked').value,
+      view:{ zoom:wave.zoom, scroll:wave.scroll, mode:wave.pendingMode || 'move' },
+      context:validContext ? { before, after } : { before:1, after:1 } },
+  };
+}
+async function requestRestore(value) {
+  if (isLoading) { notify('請先完成或取消目前的載入，再開啟專案。', true); return; }
+  const project = validateProject(value);
+  if (project.source.kind === 'demo') { await demo(project); return; }
+  restoreRequest = project;
+  $('restore-request').hidden = false;
+  $('restore-file-name').textContent = project.source.name;
+  $('restore-source').focus();
+}
+function cancelRestore() { restoreRequest = null; $('restore-request').hidden = true; }
+function restoreProjectState(project) {
+  applyState(project.state); history.states = structuredClone(project.history.states); history.index = project.history.index;
+  const preferences = project.preferences;
+  $('export-name').value = preferences.name;
+  document.querySelector(`[name="format"][value="${preferences.format}"]`).checked = true;
+  $('format-detail').textContent = preferences.format === 'mp3' ? '192 kbps · 44.1 kHz' : '16-bit PCM · 44.1 kHz';
+  wave.zoom = preferences.view.zoom; wave.scroll = preferences.view.scroll; wave.pendingMode = preferences.view.mode;
+  $('zoom').value = wave.zoom; $('zoom-value').textContent = `${wave.zoom}×`; $('wave-scroll').value = wave.scroll * 1000; $('scroll-label').hidden = wave.zoom === 1;
+  $('result-junction-before').value = preferences.context.before; $('result-junction-after').value = preferences.context.after;
+}
+function recoverPreviousLoad() {
+  engine.release(); isLoading = false;
+  const previous = loadFallback; loadFallback = null;
+  if (!previous) { returnToImport(); return false; }
+  engine.buffer = previous.buffer; fileName = previous.project.source.name;
+  wave.setAudio(previous.buffer, previous.peaks); restoreProjectState(previous.project);
+  savedSignature = previous.savedSignature;
+  $('file-name').textContent = fileName; $('file-meta').textContent = previous.meta;
+  $('original-duration').textContent = formatTime(previous.buffer.duration);
+  $('loading').hidden = true; $('import-area').hidden = true; $('workspace').hidden = false; $('features').hidden = true;
+  document.body.classList.add('has-audio'); projects.activate(previous.project.source, previous.id); render();
+  return true;
+}
 function recordEdit(before) {
   pendingDeletions = normalizedPending();
   const after = captureState();
   // Selection, seeking and playback alone must not create a step or discard redo.
   if (signature([before.ranges, before.pending]) === signature([after.ranges, after.pending])) return false;
-  return history.commit(after, before);
+  const changed = history.commit(after, before);
+  if (changed) projects.schedule();
+  return changed;
 }
 function applyState(state) {
   const restored = structuredClone(state);
@@ -52,6 +107,7 @@ function navigateHistory(direction) {
   if (!engine.buffer || pendingEdit || !(direction === 'undo' ? history.canUndo : history.canRedo)) return;
   const loop = junctionLoop;
   pause(); applyState(history[direction]()); revokeDownload(); clearNotice(); render();
+  projects.schedule();
   if (loop && selectedPendingIndex() >= 0) previewCurrentJunction({ loop:true });
 }
 
@@ -95,7 +151,8 @@ function updateButtons() {
   $('preview-deletions').disabled = !hasOutput || !pendingDeletions.length;
   $('preview-junction').disabled = !hasOutput || selectedPendingIndex() < 0;
   $('loop-junction').disabled = !junctionLoop && (!hasOutput || selectedPendingIndex() < 0);
-  $('export-button').disabled = !hasAudio || !!exportJob || !hasOutput;
+  $('export-button').disabled = !hasAudio || !!exportJob || !!exportPreparation || !hasOutput;
+  $('save-project').disabled = !loaded;
   const exportLabel = pendingDeletions.length ? '刪除清單並匯出' : '匯出音檔';
   if ($('export-button').textContent !== exportLabel) $('export-button').innerHTML = `<svg><use href="#i-download"/></svg>${exportLabel}`;
   $('edit-indicator').textContent = pendingDeletions.length ? `待刪除 ${pendingDeletions.length} 段` : dirty() ? '尚未匯出' : signature(ranges()) === signature([[0, engine.buffer?.length]]) ? '原始音檔' : '已匯出';
@@ -143,6 +200,7 @@ function setSelection(value) {
   if ($('selection-start').getAttribute('aria-invalid')) clearNotice();
   selection = value.map(frame => Math.round(Math.max(0, Math.min(engine.buffer.length, frame))));
   updateSelectionFields();
+  if (!pendingEdit) projects.schedule();
 }
 function applyTimeFields() {
   if (!engine.buffer) return false;
@@ -391,7 +449,7 @@ function tick() {
   updatePlaybackUI();
   if (engine.playing) animation = requestAnimationFrame(tick);
 }
-function seek(frame) { pause(); cursor = frame; engine.position = frame; updatePlaybackUI(); }
+function seek(frame) { pause(); cursor = frame; engine.position = frame; updatePlaybackUI(); projects.schedule(); }
 function commit(next, { clearPending = false, nextSelection = selection } = {}) {
   pause(); clearNotice(); const before = captureState();
   keptRanges = structuredClone(next);
@@ -410,10 +468,13 @@ async function confirmReplacement() {
   const dialog = $('replace-dialog'); dialog.returnValue = 'cancel'; dialog.showModal();
   return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'replace'), { once: true }));
 }
-async function acceptBuffer(buffer, name, bytes, token) {
+async function acceptBuffer(buffer, name, bytes, token, source, project = null) {
   if (token !== loadToken) { buffer.dispose?.(); return; }
   if (![1, 2].includes(buffer.numberOfChannels)) throw new Error('第一版支援單聲道與雙聲道，請先將多聲道音訊轉為立體聲。');
   if (!buffer.length || buffer.duration > MAX_SECONDS + .01) throw new Error('請選擇 30 分鐘以內且包含音訊的檔案。');
+  if (project && (buffer.length !== project.audio.length || buffer.sampleRate !== project.audio.sampleRate || buffer.numberOfChannels !== project.audio.channels)) {
+    buffer.dispose?.(); throw Object.assign(Error('原檔解碼結果與專案不同，已停止還原。請使用儲存專案時的原始音檔與支援的瀏覽器。'), { userFacing:true });
+  }
   $('loading-title').textContent = '正在繪製聲音的輪廓';
   const peaks = buffer.peaks || await makePeaks(buffer, progress => { if (token === loadToken) $('loading-detail').textContent = `波形準備中 ${Math.round(progress * 100)}%`; });
   if (token !== loadToken) { buffer.dispose?.(); return; }
@@ -426,13 +487,20 @@ async function acceptBuffer(buffer, name, bytes, token) {
   $('export-name').value = `${name.replace(/\.[^.]+$/, '')}-剪輯`;
   $('zoom').value = 1; $('zoom-value').textContent = '1×'; $('wave-scroll').value = 0; $('scroll-label').hidden = true;
   wave.setAudio(buffer, peaks);
+  if (project) restoreProjectState(project);
   isLoading = false; $('loading').hidden = true; $('import-area').hidden = true; $('workspace').hidden = false; $('features').hidden = true;
   document.body.classList.add('has-audio');
+  loadFallback?.buffer.dispose?.(); loadFallback = null;
+  projects.activate(source); cancelRestore();
+  $('draft-panel').open = false;
   render();
+  if (project) notify('剪輯與復原紀錄已還原。已建立新的工作備份，原備份仍保留；可繼續剪輯或重新匯出。');
 }
 function beginLoading() {
   wave.cancelDrag(); pendingEdit = null;
-  pause(); cancelExport(false); revokeDownload(); clearNotice(); engine.release();
+  pause(); cancelExport(false); revokeDownload(); clearNotice();
+  if (engine.buffer) loadFallback = { buffer:engine.buffer, peaks:wave.peaks, project:projects.project(), id:projects.id, savedSignature, meta:$('file-meta').textContent };
+  projects.suspend(); engine.buffer = null; engine.release();
   keptRanges = []; pendingDeletions = []; selection = [0,0]; cursor = 0;
   history.reset(captureState()); isLoading = true;
   $('workspace').hidden = true; $('import-area').hidden = true; $('features').hidden = true; $('loading').hidden = false;
@@ -448,20 +516,33 @@ async function importFile(file) {
   if (!file.size) { notify('這個檔案是空的，請選擇包含音訊的檔案。', true); return; }
   if (file.size > MAX_BYTES) { notify('檔案超過 400 MB，請先縮短音檔或轉換為 MP3。', true); return; }
   if (!/\.(mp3|wav)$/i.test(file.name)) { notify('目前支援 MP3 與 WAV，請選擇這兩種格式的音檔。', true); return; }
+  const project = restoreRequest;
+  if (project && file.size !== project.source.size) { notify(`這不是專案的原始音檔，請重新選擇「${project.source.name}」。`, true); return; }
   if (!(await confirmReplacement())) return;
+  await projects.flush();
   const token = beginLoading();
   try {
+    $('loading-title').textContent = project ? '正在核對專案原檔' : '正在建立原檔識別';
+    const source = await fingerprintFile(file, { cancelled:() => token !== loadToken, onProgress:progress => {
+      if (token === loadToken) $('loading-detail').textContent = `原檔識別 ${Math.round(progress * 100)}% · 只在此裝置核對，不會上傳。`;
+    } });
+    if (project && !sameSource(project.source, source)) throw Object.assign(Error(`檔案內容與專案不同。請選擇原始音檔「${project.source.name}」，剪輯備份仍保留。`), { userFacing:true });
     const duration = await readDuration(file);
     if (token !== loadToken) return;
     // VBR MP3 metadata may be estimated; its worker enforces the decoded sample limit.
     if (!/\.mp3$/i.test(file.name) && duration > MAX_SECONDS + .01) throw new Error('請選擇 30 分鐘以內且包含音訊的檔案。');
+    if (/\.mp3$/i.test(file.name)) {
+      const storage = await checkStorage();
+      if (token !== loadToken) return;
+      $('storage-status').textContent = `${storage.label} · 解碼期間仍可能因實際配額不足而停止`;
+    }
     const buffer = await engine.decode(file, { duration, onProgress(progress, phase) {
       if (token === loadToken) { $('loading-title').textContent = phase; $('loading-detail').textContent = `${Math.round(progress * 100)}% · 音檔只在此裝置處理，可隨時取消。`; }
     } });
-    await acceptBuffer(buffer, file.name, file.size, token);
+    await acceptBuffer(buffer, file.name, file.size, token, source, project);
   } catch (error) {
     if (token !== loadToken) return;
-    engine.release(); isLoading = false; returnToImport();
+    recoverPreviousLoad();
     notify(error.userFacing ? `無法讀取音檔：${error.message}` : error.message.includes('第一版') || error.message.includes('30 分鐘') ? error.message : '無法讀取這個音檔。可能已損毀、編碼不受支援，或裝置記憶體不足。請嘗試較短的 MP3 或 WAV。', true);
   }
 }
@@ -476,11 +557,12 @@ async function readDuration(file) {
     });
   } finally { clearTimeout(timeout); audio.removeAttribute('src'); audio.load(); URL.revokeObjectURL(url); }
 }
-async function demo() {
+async function demo(project = null) {
   if (!(await confirmReplacement())) return;
+  await projects.flush();
   const token = beginLoading();
-  try { await acceptBuffer(createDemo(), '午後練習曲.wav', 0, token); }
-  catch { if (token === loadToken) { isLoading = false; returnToImport(); notify('無法建立示範音訊，請嘗試重新整理頁面。', true); } }
+  try { await acceptBuffer(createDemo(), '午後練習曲.wav', 0, token, { kind:'demo', name:'午後練習曲.wav', id:'afternoon-v1' }, project); }
+  catch { if (token === loadToken) { recoverPreviousLoad(); notify('無法建立示範音訊，原有剪輯已保留，請重試。', true); } }
 }
 
 function clearExportProgress(job) {
@@ -489,13 +571,25 @@ function clearExportProgress(job) {
   for (const id of ['export-eta', 'export-elapsed', 'export-speed']) $(id).textContent = '';
 }
 function cancelExport(showNotice = true) {
+  exportPreparation = null;
   if (!exportJob) return;
   clearExportProgress(exportJob);
   exportJob.worker.terminate(); removeExportFile(exportJob.cacheName); exportJob = null; updateButtons();
   if (showNotice) notify('已取消匯出，剪輯內容仍然保留。');
 }
-function exportAudio() {
-  if (!engine.buffer || !totalFrames(ranges()) || exportJob) return;
+async function exportAudio() {
+  if (!engine.buffer || !totalFrames(ranges()) || exportJob || exportPreparation) return;
+  const preparation = { buffer:engine.buffer, parts:signature(outputRanges()), token:loadToken, format:document.querySelector('[name="format"]:checked').value };
+  exportPreparation = preparation; updateButtons();
+  try {
+    const storage = await checkStorage(exportBytes(totalFrames(outputRanges()), engine.buffer.numberOfChannels, preparation.format));
+    if (exportPreparation !== preparation || preparation.token !== loadToken) return;
+    $('storage-status').textContent = `${storage.label} · 容量為估計值`;
+  } catch (error) {
+    if (exportPreparation === preparation) notify(error.message, true);
+    return;
+  } finally { if (exportPreparation === preparation) { exportPreparation = null; updateButtons(); } }
+  if (preparation.token !== loadToken || preparation.parts !== signature(outputRanges()) || preparation.format !== document.querySelector('[name="format"]:checked').value) { notify('剪輯或格式已變更，請再按一次匯出。'); return; }
   if (pendingDeletions.length) applyPendingDeletions();
   if (!totalFrames(ranges())) return;
   clearNotice(); revokeDownload();
@@ -581,8 +675,10 @@ function exportAudio() {
 $('choose-file').addEventListener('click', () => $('file-input').click());
 $('replace-file').addEventListener('click', () => $('file-input').click());
 $('file-input').addEventListener('change', event => { const file = event.target.files[0]; event.target.value = ''; importFile(file); });
-$('load-demo').addEventListener('click', demo);
-$('cancel-load').addEventListener('click', () => { loadToken++; isLoading = false; engine.release(); returnToImport(); notify('已取消載入。'); });
+$('load-demo').addEventListener('click', () => demo());
+$('restore-source').addEventListener('click', () => $('file-input').click());
+$('cancel-restore').addEventListener('click', cancelRestore);
+$('cancel-load').addEventListener('click', () => { loadToken++; const recovered = recoverPreviousLoad(); notify(recovered ? '已取消載入，原本的剪輯仍然保留。' : '已取消載入。'); });
 for (const type of ['dragenter', 'dragover']) document.addEventListener(type, event => { event.preventDefault(); if (!isLoading) $('import-area').classList.add('drag-over'); });
 document.addEventListener('dragleave', event => { if (!event.relatedTarget) $('import-area').classList.remove('drag-over'); });
 document.addEventListener('drop', event => {
@@ -614,11 +710,15 @@ $('preview-result').addEventListener('click', () => startPlayback(outputRanges()
 $('preview-selection').addEventListener('click', () => { if (applyTimeFields()) startPlayback(intersect(ranges(), selection), selection[0]); });
 $('zoom').addEventListener('input', event => {
   wave.zoom = Number(event.target.value); $('zoom-value').textContent = `${wave.zoom}×`; $('scroll-label').hidden = wave.zoom === 1; wave.draw();
+  projects.schedule();
 });
-$('wave-scroll').addEventListener('input', event => { wave.scroll = Number(event.target.value) / 1000; wave.draw(); });
+$('wave-scroll').addEventListener('input', event => { wave.scroll = Number(event.target.value) / 1000; wave.draw(); projects.schedule(); });
 document.querySelectorAll('[name="format"]').forEach(input => input.addEventListener('change', () => {
   $('format-detail').textContent = input.value === 'mp3' ? '192 kbps · 44.1 kHz' : '16-bit PCM · 44.1 kHz';
+  projects.schedule();
 }));
+$('export-name').addEventListener('input', () => projects.schedule());
+for (const id of ['result-junction-before', 'result-junction-after']) $(id).addEventListener('change', () => projects.schedule());
 $('export-button').addEventListener('click', exportAudio);
 $('cancel-export').addEventListener('click', () => cancelExport());
 $('result-audio').addEventListener('play', () => {
@@ -692,6 +792,6 @@ document.addEventListener('keydown', event => {
   else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); $('delete-selection').click(); }
 });
 window.addEventListener('beforeunload', event => { if (dirty() || pendingDeletions.length || exportJob) { event.preventDefault(); event.returnValue = ''; } });
-window.addEventListener('pagehide', event => { cancelExport(false); pause(); if (!event.persisted) { revokeDownload(); engine.release(); engine.context?.close(); } });
+window.addEventListener('pagehide', event => { cancelExport(false); pause(); if (!event.persisted) { revokeDownload(); engine.release(); loadFallback?.buffer.dispose?.(); loadFallback = null; engine.context?.close(); } });
 
 // Render is entirely local: no analytics, fetch of audio, or account is required.
