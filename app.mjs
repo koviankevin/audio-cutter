@@ -610,7 +610,7 @@ function cancelExport(showNotice = true) {
 async function exportAudio() {
   if (!engine.buffer || !totalFrames(ranges()) || exportJob || exportPreparation) return;
   const preparation = { buffer:engine.buffer, parts:signature(outputRanges()), token:loadToken, format:document.querySelector('[name="format"]:checked').value };
-  exportPreparation = preparation; updateButtons();
+  exportPreparation = preparation; clearNotice(); revokeDownload(); updateButtons();
   try {
     const storage = await checkStorage(exportBytes(totalFrames(outputRanges()), engine.buffer.numberOfChannels, preparation.format));
     if (exportPreparation !== preparation || preparation.token !== loadToken) return;
