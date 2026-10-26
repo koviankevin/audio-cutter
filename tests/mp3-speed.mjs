@@ -14,7 +14,7 @@ const seconds = Number(process.env.MP3_SECONDS || 60);
 try {
   if (process.env.MP3_WORKER_SOURCE) {
     const body = await readFile(process.env.MP3_WORKER_SOURCE, 'utf8');
-    await page.route('**/export-worker.js', (route) => route.fulfill({ contentType: 'text/javascript', body }));
+    await page.route('**/export-worker.js*', (route) => route.fulfill({ contentType: 'text/javascript', body }));
   }
   await page.goto(url);
   const report = await page.evaluate(

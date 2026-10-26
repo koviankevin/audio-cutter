@@ -18,7 +18,7 @@ const format = process.env.EXPORT_FORMAT || 'wav';
 try {
   if (process.env.EXPORT_WORKER_SOURCE) {
     const body = await readFile(process.env.EXPORT_WORKER_SOURCE, 'utf8');
-    await page.route('**/export-worker.js', (route) => route.fulfill({ contentType: 'text/javascript', body }));
+    await page.route('**/export-worker.js*', (route) => route.fulfill({ contentType: 'text/javascript', body }));
   }
   await page.goto(url);
   const start = Date.now();

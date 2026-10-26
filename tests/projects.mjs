@@ -34,6 +34,12 @@ try {
   await page.goto(url);
   await page.locator('#file-input').setInputFiles(source);
   await page.locator('#workspace').waitFor({ state: 'visible' });
+  const editorTop = (await page.locator('#workspace').boundingBox()).y;
+  await page.waitForFunction(() => document.getElementById('project-status').textContent.startsWith('已自動保存'));
+  assert.ok(
+    Math.abs((await page.locator('#workspace').boundingBox()).y - editorTop) < 1,
+    'saving must not shift the waveform under the pointer',
+  );
   async function queue(start, end) {
     await page.locator('#selection-start').fill(String(start));
     await page.locator('#selection-end').fill(String(end));
@@ -126,18 +132,17 @@ try {
   assert.equal(await page.locator('#pending-count').textContent(), '2');
   await page.locator('#redo').click();
   assert.equal(await page.locator('#output-duration').textContent(), '00:08.000');
-  await page.evaluate(() => {
-    const read = Blob.prototype.arrayBuffer;
-    window.slowFileRead = true;
-    Blob.prototype.arrayBuffer = async function () {
-      if (window.slowFileRead) await new Promise((resolve) => setTimeout(resolve, 400));
-      return read.call(this);
-    };
-  });
+  await context.route(
+    '**/fingerprint-worker.mjs*',
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await route.continue().catch(() => {});
+    },
+    { times: 1 },
+  );
   await page.locator('#file-input').setInputFiles(source);
   await page.locator('#loading').waitFor({ state: 'visible' });
   await page.locator('#cancel-load').click();
-  await page.evaluate(() => (window.slowFileRead = false));
   await page.waitForTimeout(500);
   assert.equal(await page.locator('#workspace').isVisible(), true, 'cancelled replacement retains original workspace');
   assert.equal(
@@ -168,6 +173,7 @@ try {
   });
   await portable.waitForFunction(() => document.getElementById('notice').textContent.includes('專案內容不完整'));
   assert.equal(await portable.locator('#pending-summary').textContent(), before);
+  await portable.waitForFunction(() => document.getElementById('project-status').textContent.startsWith('已自動保存'));
 
   const sibling = await portableContext.newPage();
   await sibling.goto(url);
@@ -211,7 +217,7 @@ try {
     const put = IDBObjectStore.prototype.put;
     window.failDraftWrites = true;
     IDBObjectStore.prototype.put = function (...args) {
-      if (window.failDraftWrites && this.transaction.db.name === 'yin-jian-projects')
+      if (window.failDraftWrites && this.transaction.db.name === 'yin-jian-projects' && this.name === 'summaries')
         throw new DOMException('Full', 'QuotaExceededError');
       return put.apply(this, args);
     };
@@ -222,10 +228,58 @@ try {
   await quota.locator('#load-demo').click();
   await quota.locator('#workspace').waitFor({ state: 'visible' });
   await quota.waitForFunction(() => document.getElementById('project-status').textContent.includes('保存失敗'));
+  const counts = await quota.evaluate(async () => {
+    const { DraftStore } = await import('./draft-store.mjs'),
+      db = await new DraftStore().open();
+    return new Promise((resolve) => {
+      const transaction = db.transaction(['documents', 'summaries']);
+      const documents = transaction.objectStore('documents').count(),
+        summaries = transaction.objectStore('summaries').count();
+      transaction.oncomplete = () => resolve([documents.result, summaries.result]);
+    });
+  });
+  assert.deepEqual(counts, [0, 0], 'a failed summary write rolls back the entire saved document');
   await quota.evaluate(() => (window.failDraftWrites = false));
   await quota.locator('#export-name').fill('儲存已恢復');
   await quota.waitForFunction(() => document.getElementById('project-status').textContent.startsWith('已自動保存'));
   assert.equal(await quota.locator('#file-name').textContent(), '午後練習曲.wav');
+  // Force expensive hashing in either realm: only the background worker may stall.
+  const responsiveContext = await browser.newContext();
+  const slowDigest = `const realDigest = crypto.subtle.digest.bind(crypto.subtle); crypto.subtle.digest = (...args) => { const start = performance.now(); while (performance.now() - start < 500) {} return realDigest(...args); };`;
+  await responsiveContext.addInitScript(slowDigest);
+  await responsiveContext.route('**/fingerprint-worker.mjs*', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: slowDigest + '\n' + (await response.text()) });
+  });
+  const responsive = await responsiveContext.newPage();
+  responsive.on('pageerror', (error) => errors.push(error.message));
+  await responsive.goto(url);
+  await responsive.locator('#app-startup').waitFor({ state: 'hidden' });
+  // Start after Playwright has materialized the synthetic File in the page.
+  // Its own base64/file injection is outside the application's hashing work.
+  await responsive.locator('#file-input').setInputFiles(source);
+  await responsive.evaluate(() => {
+    window.identityPulses = [];
+    let last = performance.now();
+    window.identityTimer = setInterval(() => {
+      const now = performance.now();
+      if (
+        !document.getElementById('loading').hidden &&
+        document.getElementById('loading-title').textContent === '正在準備音檔'
+      )
+        window.identityPulses.push(now - last);
+      last = now;
+    }, 20);
+  });
+  await responsive.locator('#workspace').waitFor({ state: 'visible' });
+  const pulses = await responsive.evaluate(() => {
+    clearInterval(window.identityTimer);
+    return window.identityPulses;
+  });
+  assert.ok(
+    pulses.length > 20 && Math.max(...pulses) < 350,
+    `expensive original-file verification keeps the main UI responsive (${pulses.length} pulses; max gap ${Math.max(...pulses)}ms)`,
+  );
   assert.deepEqual(errors, []);
   await writeFile(
     path.join(output, 'result.json'),
@@ -244,7 +298,12 @@ try {
           'failed replacement recovery',
           'blocked storage',
           'mobile',
+          'cancelled replacement',
+          'independent tabs',
+          'save quota recovery',
+          'background identity responsiveness',
         ],
+        identityHeartbeat: { forcedDigestMs: 500, samples: pulses.length, maxGapMs: Math.max(...pulses) },
       },
       null,
       2,

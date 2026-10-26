@@ -1,6 +1,7 @@
 import { SAMPLE_RATE, intersect, totalFrames, frameAtOffset } from './core.mjs';
 import { ChunkSource } from './chunk-source.mjs';
 import { timelineSlice } from './stream-core.mjs';
+import { applyJoinFades } from './join-fades.mjs';
 
 export class AudioEngine {
   constructor() { this.context = null; this.buffer = null; this.nodes = []; this.playing = false; this.position = 0; this.generation = 0; this.onError = () => {}; }
@@ -28,8 +29,9 @@ export class AudioEngine {
     for (const [a, b] of parts) {
       for (let start = a; start < b; start += 88200) {
         const end = Math.min(b, start + 88200);
-        const data = await source.readChannels(start, end);
+        const data = source.readChannels ? await source.readChannels(start, end) : Array.from({ length:source.numberOfChannels }, (_, c) => source.getChannelData(c).slice(start, end));
         if (generation !== this.generation) return null;
+        applyJoinFades(data, start, this.fadeParts, this.fadeFrames);
         data.forEach((channel, index) => preview.copyToChannel(channel, index, offset));
         offset += end - start;
       }
@@ -65,11 +67,12 @@ export class AudioEngine {
       node.connect(context.destination); node.start(this.startedAt); this.nodes.push(node);
     } else await fill();
   }
-  async play(ranges, fromFrame = 0, { loop = false } = {}) {
+  async play(ranges, fromFrame = 0, { loop = false, fadeFrames = 0, fadeParts = ranges } = {}) {
     this.pause();
     const generation = this.generation;
     const queue = intersect(ranges, [fromFrame, this.buffer.length]);
     this.queue = queue.length ? queue : ranges.map(range => [...range]);
+    this.fadeFrames = fadeFrames; this.fadeParts = fadeParts.map(part => [...part]);
     if (!this.queue.length) return;
     const context = this.getContext();
     await context.resume();
@@ -77,7 +80,7 @@ export class AudioEngine {
     this.looping = loop;
     this.position = this.queue[0][0];
     this.playDuration = totalFrames(this.queue) / this.buffer.sampleRate;
-    if (this.buffer.readChannels) { await this.playStream(generation, loop); return; }
+    if (this.buffer.readChannels || fadeFrames > 0) { await this.playStream(generation, loop); return; }
     this.startedAt = context.currentTime + 0.035;
     this.playing = true;
     if (loop) {

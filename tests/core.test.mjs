@@ -9,6 +9,7 @@ import './export-progress.test.mjs';
 import './export-junctions.test.mjs';
 import './media-window.test.mjs';
 import './project.test.mjs';
+import './join-fades.test.mjs';
 
 test('trimming head/tail and deleting a middle section keep chronological intervals', () => {
   assert.deepEqual(intersect([[0,100]], [20,80]), [[20,80]]);

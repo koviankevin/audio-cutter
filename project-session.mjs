@@ -1,5 +1,6 @@
 import { DraftStore } from './draft-store.mjs';
 import { validateProject, parseProject, PROJECT_LIMIT } from './project.mjs';
+import { recordIssue } from './support.mjs';
 
 const $ = (id) => document.getElementById(id);
 export class ProjectSession {
@@ -15,6 +16,13 @@ export class ProjectSession {
       this.limit += 10;
       this.refresh();
     });
+    $('show-drafts').addEventListener('click', () => {
+      const panel = $('draft-panel');
+      panel.hidden = false;
+      panel.open = true;
+      panel.scrollIntoView({ block: 'start' });
+      panel.querySelector('summary').focus({ preventScroll: true });
+    });
     $('save-project').addEventListener('click', () => this.download());
     $('open-project').addEventListener('click', () => $('project-input').click());
     $('project-input').addEventListener('change', async (event) => {
@@ -25,13 +33,14 @@ export class ProjectSession {
         if (file.size > PROJECT_LIMIT) throw Error('專案檔過大，請選擇 8 MB 以內的音剪專案。');
         await this.restore(parseProject(await file.text()));
       } catch (error) {
-        this.notify(error.message, true);
+        this.notify(error.message, true, 'project-import');
       }
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) this.flush();
     });
     window.addEventListener('pagehide', () => this.flush());
+    window.addEventListener('focus', () => this.refresh());
     this.refresh();
   }
   activate(source, id = crypto.randomUUID()) {
@@ -46,6 +55,7 @@ export class ProjectSession {
     this.revision++;
   }
   status(message, error = false) {
+    if (error) recordIssue('project-save');
     $('project-status').textContent = message;
     $('project-status').classList.toggle('save-error', error);
   }
@@ -81,7 +91,7 @@ export class ProjectSession {
           await this.store.save(id, project);
           if (id === this.id && revision === this.revision)
             this.status(
-              `已自動保存 ${new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })} · ${project.source.kind === 'demo' ? '示範音訊可直接還原' : '重新開啟時請選入原檔'}`,
+              `已自動保存 ${new Date().toLocaleTimeString('zh-TW', { hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })}`,
             );
           await this.refresh();
         } catch {
@@ -96,6 +106,7 @@ export class ProjectSession {
       const list = $('draft-list');
       list.replaceChildren();
       $('draft-panel').hidden = !summaries.length;
+      $('show-drafts').disabled = !summaries.length;
       $('more-drafts').hidden = summaries.length < this.limit;
       for (const item of summaries) {
         const row = document.createElement('li'),

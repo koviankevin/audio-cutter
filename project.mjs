@@ -90,6 +90,8 @@ export function validateProject(value) {
   )
     fail();
   const context = preferences.context;
+  const fadeMs = preferences.fadeMs ?? 0;
+  if (![0, 5, 10].includes(fadeMs)) fail();
   if (
     !context ||
     ![context.before, context.after].every((n) => Number.isFinite(n) && n >= 0 && n <= 30) ||
@@ -113,6 +115,7 @@ export function validateProject(value) {
     state: current,
     history: { states, index: history.index },
     preferences: {
+      fadeMs,
       name: preferences.name,
       format: preferences.format,
       view: { zoom: view.zoom, scroll: view.scroll, mode: view.mode },

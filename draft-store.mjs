@@ -46,9 +46,15 @@ export class DraftStore {
     const db = await this.open();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(stores, mode);
-      const result = operate(tx);
+      let result;
       tx.oncomplete = () => resolve(typeof result === 'function' ? result() : result?.result);
       tx.onabort = tx.onerror = () => reject(tx.error || Error('無法保存剪輯，請下載專案檔備份。'));
+      try {
+        result = operate(tx);
+      } catch (error) {
+        tx.abort();
+        reject(error);
+      }
     });
   }
   save(id, project) {

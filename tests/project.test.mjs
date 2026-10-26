@@ -21,6 +21,7 @@ const fixture = () => ({
   state: state(),
   history: { states: [state()], index: 0 },
   preferences: {
+    fadeMs: 5,
     name: '我的剪輯',
     format: 'wav',
     view: { zoom: 4, scroll: 0.2, mode: 'start' },
@@ -71,6 +72,14 @@ test('untrusted projects reject malformed intervals, audio mismatches, history a
   }
   assert.throws(() => parseProject('{broken'));
   assert.throws(() => parseProject(' '.repeat(8 * 1024 * 1024 + 1)), /8 MB/);
+});
+
+test('version-one projects saved before optional join processing default to unchanged audio', () => {
+  const project = fixture();
+  delete project.preferences.fadeMs;
+  assert.equal(validateProject(project).preferences.fadeMs, 0);
+  project.preferences.fadeMs = 90;
+  assert.throws(() => validateProject(project));
 });
 
 test('fingerprints inspect all file bytes in bounded blocks and accept renamed identical sources', async () => {

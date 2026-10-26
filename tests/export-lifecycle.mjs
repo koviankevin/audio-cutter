@@ -69,7 +69,7 @@ try {
     window.Worker = class extends Native {
       constructor(...args) {
         super(...args);
-        if (String(args[0]).endsWith('/export-worker.js'))
+        if (new URL(String(args[0]), location.href).pathname.endsWith('/export-worker.js'))
           this.addEventListener('message', ({ data }) => {
             if (window.cancelNextExport && data.type === 'progress') {
               window.cancelNextExport = false;
@@ -86,8 +86,8 @@ try {
   await assertProgressCleared();
   assert.equal(await page.locator('#original-duration').textContent(), '00:18.000');
   // Inject a real storage failure into the Worker boundary after its first disk write.
-  const original = await readFile('export-worker.js', 'utf8');
-  await context.route('**/export-worker.js', (route) =>
+  const original = await readFile(`${process.env.PUBLIC_ROOT || '.'}/export-worker.js`, 'utf8');
+  await context.route('**/export-worker.js*', (route) =>
     route.fulfill({
       contentType: 'text/javascript',
       body: `const originalWrite=FileSystemSyncAccessHandle.prototype.write;let writes=0;FileSystemSyncAccessHandle.prototype.write=function(...args){if(++writes===2)throw new DOMException('test quota','QuotaExceededError');return originalWrite.apply(this,args);};\n${original}`,
@@ -99,7 +99,7 @@ try {
   await waitFiles(0);
   await assertProgressCleared();
   assert.equal(await page.locator('#export-button').isEnabled(), true);
-  await context.unroute('**/export-worker.js');
+  await context.unroute('**/export-worker.js*');
   const first = await exportWav();
   await assertProgressCleared();
   await waitFiles(1);

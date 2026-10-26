@@ -4,7 +4,7 @@ export async function workerMemory(browser, script = 'decode-worker.js') {
   const results = [];
   try {
     const { targetInfos } = await cdp.send('Target.getTargets');
-    for (const target of targetInfos.filter((t) => t.type === 'worker' && t.url.endsWith(`/${script}`))) {
+    for (const target of targetInfos.filter((t) => t.type === 'worker' && new URL(t.url).pathname.endsWith(`/${script}`))) {
       const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: false });
       let sequence = 0;
       async function send(method) {

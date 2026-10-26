@@ -36,6 +36,9 @@ export class Waveform {
     this.ranges = ranges; this.selection = selection; this.playhead = playhead; this.pending = pending; this.draw();
   }
   get viewLength() { return this.length / this.zoom; }
+  get textScale() { return (this.labelSize || 14) / 14; }
+  get top() { return 31 * this.textScale; }
+  get bottomPadding() { return 24 * this.textScale; }
   get viewStart() { return (this.length - this.viewLength) * this.scroll; }
   revealFrame(frame) {
     if (this.zoom === 1) return;
@@ -51,8 +54,8 @@ export class Waveform {
   pendingHandleAt(event) {
     const rect = this.canvas.getBoundingClientRect();
     const y = event.clientY - rect.top, x = event.clientX - rect.left;
-    if (y < 31 || y > rect.height - 24) return null;
-    let closest = null, distance = event.pointerType === 'touch' ? 22 : 11;
+    if (y < this.top || y > rect.height - this.bottomPadding) return null;
+    let closest = null, distance = event.pointerType === 'touch' ? 22 : 12;
     for (const [index, range] of (this.pending || []).entries()) {
       for (const [endpoint, frame] of range.entries()) {
         const position = this.frameToX(frame), delta = Math.abs(position - x);
@@ -66,7 +69,7 @@ export class Waveform {
   pendingBodyAt(event) {
     const rect = this.canvas.getBoundingClientRect();
     const y = event.clientY - rect.top, x = event.clientX - rect.left;
-    if (y < 31 || y > rect.height - 24 || x < 0 || x > rect.width) return null;
+    if (y < this.top || y > rect.height - this.bottomPadding || x < 0 || x > rect.width) return null;
     const frame = this.xToFrame(event.clientX);
     const index = (this.pending || []).findIndex(([a, b]) => a <= frame && frame < b);
     if (index < 0) return null;
@@ -202,21 +205,21 @@ export class Waveform {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.drawImage(this.background, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const cursor = (this.playhead - this.viewStart) / this.viewLength * width, top = 31, bottom = height - 24;
+    const cursor = (this.playhead - this.viewStart) / this.viewLength * width, top = this.top, bottom = height - this.bottomPadding;
     if (cursor >= 0 && cursor <= width) {
       ctx.strokeStyle = '#14796c'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(cursor, top - 5); ctx.lineTo(cursor, bottom + 3); ctx.stroke();
       ctx.fillStyle = '#14796c'; ctx.beginPath(); ctx.moveTo(cursor - 4, top - 7); ctx.lineTo(cursor + 4, top - 7); ctx.lineTo(cursor, top - 2); ctx.fill();
     }
   }
   drawBackground(ctx, width, height) {
-    const top = 31, bottom = height - 24, middle = (top + bottom) / 2, amplitude = (bottom - top) * 0.45;
+    const top = this.top, bottom = height - this.bottomPadding, middle = (top + bottom) / 2, amplitude = (bottom - top) * 0.45;
     const xOf = frame => (frame - this.viewStart) / this.viewLength * width;
     const selectedStart = Math.max(0, xOf(this.selection[0]));
     const selectedEnd = Math.min(width, xOf(this.selection[1]));
     if (selectedEnd > selectedStart) { ctx.fillStyle = '#e7f1e6'; ctx.fillRect(selectedStart, top, selectedEnd - selectedStart, bottom - top); }
     ctx.font = `${this.labelSize}px "Segoe UI", sans-serif`; ctx.textBaseline = 'middle';
     const viewSeconds = this.viewLength / this.sampleRate;
-    const intervals = [.01,.02,.05,.1,.2,.5,1,2,5,10,15,30,60,120,300,600];
+    const intervals = [.01,.02,.05,.1,.2,.5,1,2,5,10,15,30,60,120,300,600,1200,1800,3600];
     const labelWidth = ctx.measureText(formatTime((this.viewStart + this.viewLength) / this.sampleRate, true)).width + 24;
     const step = intervals.find(value => value >= viewSeconds / Math.max(1, Math.floor(width / Math.max(100, labelWidth)))) ?? 600;
     const startSeconds = this.viewStart / this.sampleRate;
@@ -225,7 +228,7 @@ export class Waveform {
       ctx.strokeStyle = '#e8eee3'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + .5, top); ctx.lineTo(x + .5, bottom); ctx.stroke();
       const label = formatTime(seconds, step < 1), edge = ctx.measureText(label).width / 2 + 5;
       ctx.fillStyle = '#536b61'; ctx.textAlign = x < edge ? 'left' : x > width - edge ? 'right' : 'center';
-      ctx.fillText(label, Math.max(5, Math.min(width - 5, x)), 15);
+      ctx.fillText(label, Math.max(5, Math.min(width - 5, x)), top / 2);
     }
     ctx.strokeStyle = '#dce7d7'; ctx.beginPath(); ctx.moveTo(0, middle + .5); ctx.lineTo(width, middle + .5); ctx.stroke();
     const bins = this.peaks.length / 2;
@@ -260,7 +263,7 @@ export class Waveform {
       const label = `待刪 ${String(index + 1).padStart(2, '0')}`;
       if (right - left > ctx.measureText(label).width + 12) {
         ctx.fillStyle = '#795622'; ctx.textAlign = 'left';
-        ctx.fillText(label, left + 6, top + 11);
+        ctx.fillText(label, left + 6, top + 11 * this.textScale);
       }
     }
     if (selectedEnd > selectedStart) {
@@ -283,6 +286,6 @@ export class Waveform {
         ctx.moveTo(left + 5, middle - 7); ctx.lineTo(left + 5, middle + 7); ctx.stroke();
       }
     }
-    ctx.textAlign = 'right'; ctx.fillStyle = '#536b61'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - 10);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#536b61'; ctx.fillText('ORIGINAL TIMELINE', width - 8, height - this.bottomPadding / 2);
   }
 }

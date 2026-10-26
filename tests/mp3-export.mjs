@@ -36,7 +36,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('dialog', (d) => d.accept());
 let downloads = 0;
 page.on('download', () => downloads++);
-const original = await readFile('export-worker.js', 'utf8');
+const original = await readFile(`${process.env.PUBLIC_ROOT || '.'}/export-worker.js`, 'utf8');
 const slow =
   "const post=self.postMessage.bind(self);self.postMessage=(data,...rest)=>setTimeout(()=>post(data,...rest),data.type==='ready'?1600:data.type==='complete'?2200:data.type==='progress'?50:0);\n";
 async function assertCleared() {
@@ -45,7 +45,7 @@ async function assertCleared() {
   assert.equal(await page.evaluate(() => window.exportTimers.size), 0, 'export timers must be released');
 }
 try {
-  await context.route('**/export-worker.js', (route) =>
+  await context.route('**/export-worker.js*', (route) =>
     route.fulfill({ contentType: 'text/javascript', body: slow + original }),
   );
   await page.addInitScript(() => {
@@ -67,7 +67,7 @@ try {
     window.Worker = class extends Native {
       constructor(...args) {
         super(...args);
-        if (String(args[0]).endsWith('/export-worker.js')) {
+        if (new URL(String(args[0]), location.href).pathname.endsWith('/export-worker.js')) {
           window.exportStartedAt = performance.now();
           this.addEventListener('message', ({ data }) => {
             if (data.type === 'ready') window.encoders.push(data.encoder);
@@ -189,8 +189,8 @@ try {
   assert.ok(Math.abs(audio.duration - 90) < 0.1);
   assert.equal(audio.channels, 2);
   audio.crossings.forEach((n, c) => assert.ok(Math.abs(n - (c ? 880 : 440)) <= 1));
-  await context.unroute('**/export-worker.js');
-  await context.route('**/export-worker.js', (route) =>
+  await context.unroute('**/export-worker.js*');
+  await context.route('**/export-worker.js*', (route) =>
     route.fulfill({ contentType: 'text/javascript', body: 'self.WebAssembly=undefined;\n' + original }),
   );
   await page.locator('#export-button').click();
@@ -208,8 +208,8 @@ try {
   assert.equal(compatibility.channels, 2);
   compatibility.crossings.forEach((n, c) => assert.ok(Math.abs(n - (c ? 880 : 440)) <= 1));
   await assertCleared();
-  await context.unroute('**/export-worker.js');
-  await context.route('**/export-worker.js', (route) =>
+  await context.unroute('**/export-worker.js*');
+  await context.route('**/export-worker.js*', (route) =>
     route.fulfill({
       contentType: 'text/javascript',
       body: "self.onmessage=()=>setTimeout(()=>self.postMessage({type:'error',message:'測試匯出錯誤'}),1600);",

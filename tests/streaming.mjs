@@ -131,7 +131,8 @@ async function cacheNames(target = page) {
 try {
   await page.goto(url);
   await page.evaluate(async () => {
-    const { AudioEngine } = await import('./audio.mjs');
+    const suffix = new URL(document.querySelector('script[type="module"]').src).search;
+    const { AudioEngine } = await import(`./audio.mjs${suffix}`);
     const decode = AudioEngine.prototype.decode;
     AudioEngine.prototype.decode = async function (...args) {
       window.audioEngine = this;

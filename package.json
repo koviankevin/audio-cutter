@@ -1,6 +1,6 @@
 {
   "name": "audio-cutter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "音剪 — 在瀏覽器內完成音檔剪輯",
@@ -13,10 +13,14 @@
     "test:export-lifecycle": "node tests/export-lifecycle.mjs",
     "test:mp3-speed": "node tests/mp3-speed.mjs",
     "test:mp3-export": "node tests/mp3-export.mjs",
-    "test:export-preview": "node tests/export-preview.mjs && node tests/projects.mjs",
+    "test:export-preview": "node tests/export-preview.mjs && node tests/projects.mjs && node tests/product.mjs",
     "test:font-size": "node tests/font-size.mjs",
-    "test:projects": "node tests/projects.mjs"
+    "test:projects": "node tests/projects.mjs",
+    "test:product": "node tests/product.mjs",
+    "test:product-long": "node tests/product-long.mjs"
   },
-  "devDependencies": { "playwright": "1.62.1" },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
   "license": "MIT"
 }

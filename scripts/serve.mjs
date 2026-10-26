@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-export const publicFiles = ['index.html','preferences.js','project.mjs','project-session.mjs','draft-store.mjs','storage-check.mjs','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','export-store.mjs','mp3-encoder.mjs','export-progress.mjs','media-window.mjs','chunk-source.mjs','stream-core.mjs','decode-worker.js','vendor/WasmMediaEncoder-0.7.0.min.js','vendor/lame-0.7.0.wasm','vendor/wasm-media-encoders-LICENSE.txt','vendor/lame-wasm-LICENSE.txt','vendor/mpg123-decoder.min.js','vendor/mpg123-decoder-LICENSE.txt','vendor/mpg123-LICENSE.txt','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
+export const publicFiles = ['index.html','bootstrap.js','preferences.js','support.mjs','version.mjs','join-fades.mjs','CHANGELOG.md','LICENSE','source-identity.mjs','fingerprint-worker.mjs','project.mjs','project-session.mjs','draft-store.mjs','storage-check.mjs','style.css','favicon.svg','app.mjs','core.mjs','audio.mjs','waveform.mjs','pcm.mjs','export-worker.js','export-store.mjs','mp3-encoder.mjs','export-progress.mjs','media-window.mjs','chunk-source.mjs','stream-core.mjs','decode-worker.js','vendor/WasmMediaEncoder-0.7.0.min.js','vendor/lame-0.7.0.wasm','vendor/wasm-media-encoders-LICENSE.txt','vendor/lame-wasm-LICENSE.txt','vendor/mpg123-decoder.min.js','vendor/mpg123-decoder-LICENSE.txt','vendor/mpg123-LICENSE.txt','vendor/lame.min.js','vendor/lamejs-LICENSE.txt','vendor/README.md','.nojekyll'];
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 export async function startServer({ port = 4173, base = '/', publicRoot = process.env.PUBLIC_ROOT } = {}) {
   const servedRoot = publicRoot ? path.resolve(root, publicRoot) : root;
@@ -14,7 +14,7 @@ export async function startServer({ port = 4173, base = '/', publicRoot = proces
     catch { res.writeHead(400).end(); return; }
     if (!pathname.startsWith(base)) { res.writeHead(404).end('Not found'); return; }
     const name = pathname.slice(base.length) || 'index.html';
-    if (!publicFiles.includes(name)) { res.writeHead(404).end('Not found'); return; }
+    if (!publicFiles.includes(name) && name !== 'manifest.json') { res.writeHead(404).end('Not found'); return; }
     try {
       const bytes = await readFile(path.join(servedRoot, name));
       res.writeHead(200, { 'Content-Type': mime[path.extname(name)] || 'text/plain', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff' });
