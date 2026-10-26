@@ -223,12 +223,18 @@ export class Waveform {
     const labelWidth = ctx.measureText(formatTime((this.viewStart + this.viewLength) / this.sampleRate, true)).width + 24;
     const step = intervals.find(value => value >= viewSeconds / Math.max(1, Math.floor(width / Math.max(100, labelWidth)))) ?? 600;
     const startSeconds = this.viewStart / this.sampleRate;
+    let previousLabelRight = -Infinity;
     for (let seconds = Math.ceil(startSeconds / step) * step; seconds <= startSeconds + viewSeconds; seconds += step) {
       const x = xOf(seconds * this.sampleRate);
       ctx.strokeStyle = '#e8eee3'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + .5, top); ctx.lineTo(x + .5, bottom); ctx.stroke();
       const label = formatTime(seconds, step < 1), edge = ctx.measureText(label).width / 2 + 5;
       ctx.fillStyle = '#536b61'; ctx.textAlign = x < edge ? 'left' : x > width - edge ? 'right' : 'center';
-      ctx.fillText(label, Math.max(5, Math.min(width - 5, x)), top / 2);
+      const labelX = Math.max(5, Math.min(width - 5, x)), labelWidth = ctx.measureText(label).width;
+      const labelLeft = labelX - (ctx.textAlign === 'right' ? labelWidth : ctx.textAlign === 'center' ? labelWidth / 2 : 0);
+      if (labelLeft >= previousLabelRight + 8 * this.textScale) {
+        ctx.fillText(label, labelX, top / 2);
+        previousLabelRight = labelLeft + labelWidth;
+      }
     }
     ctx.strokeStyle = '#dce7d7'; ctx.beginPath(); ctx.moveTo(0, middle + .5); ctx.lineTo(width, middle + .5); ctx.stroke();
     const bins = this.peaks.length / 2;

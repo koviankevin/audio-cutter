@@ -81,6 +81,7 @@ try {
   await page.locator('#file-input').setInputFiles(file);
   await page.locator('#workspace').waitFor({ state: 'visible' });
   await page.locator('#export-button').click();
+  await page.locator('#export-progress').waitFor({ state: 'visible' });
   assert.match(await page.locator('#export-eta').textContent(), /估算/);
   assert.equal(await page.locator('#export-elapsed').textContent(), '00:00');
   assert.equal(await page.locator('#export-speed').textContent(), '計算中…');
@@ -101,6 +102,7 @@ try {
   await page.waitForTimeout(600);
   await assertCleared();
   await page.locator('#export-button').click();
+  await page.locator('#export-progress').waitFor({ state: 'visible' });
   assert.match(await page.locator('#export-eta').textContent(), /估算/);
   assert.equal(await page.locator('#export-elapsed').textContent(), '00:00');
   assert.equal(await page.locator('#export-speed').textContent(), '計算中…');
@@ -194,6 +196,7 @@ try {
     route.fulfill({ contentType: 'text/javascript', body: 'self.WebAssembly=undefined;\n' + original }),
   );
   await page.locator('#export-button').click();
+  await page.locator('#export-progress').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#export-result').isVisible(), false);
   assert.equal(await page.locator('#result-size').textContent(), '');
   await page.locator('#export-result').waitFor({ state: 'visible' });

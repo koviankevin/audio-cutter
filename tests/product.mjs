@@ -30,8 +30,16 @@ try {
       return start.apply(this, args);
     };
     const fill = CanvasRenderingContext2D.prototype.fillText;
+    let axisLabels = [];
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...rest) {
+      if (/^\d+:\d+/.test(text)) {
+        const width = this.measureText(text).width;
+        const left = x - (this.textAlign === 'right' ? width : this.textAlign === 'center' ? width / 2 : 0);
+        axisLabels.push([left, left + width]);
+      }
       if (text === 'ORIGINAL TIMELINE') {
+        window.timelineAxis = axisLabels;
+        axisLabels = [];
         const metrics = this.measureText(text);
         window.timelineFooter = {
           top: y - metrics.actualBoundingBoxAscent,
@@ -190,6 +198,11 @@ try {
       ),
       true,
       'scaled Canvas footer is not clipped',
+    );
+    assert.equal(
+      await page.evaluate(() => window.timelineAxis.every((span, i, labels) => !i || span[0] >= labels[i - 1][1] + 1)),
+      true,
+      'scaled axis labels remain separated',
     );
     await page.screenshot({ path: path.join(output, `text-200-${width}.png`), fullPage: true });
   }

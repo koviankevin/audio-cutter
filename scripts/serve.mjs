@@ -21,7 +21,18 @@ export async function startServer({ port = 4173, base = '/', publicRoot = proces
       res.end(req.method === 'HEAD' ? undefined : bytes);
     } catch { res.writeHead(404).end('Not found'); }
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  const listen = () => new Promise((resolve, reject) => {
+    const failed = error => { server.off('listening', ready); reject(error); };
+    const ready = () => { server.off('error', failed); resolve(); };
+    server.once('error', failed); server.once('listening', ready); server.listen(port, '127.0.0.1');
+  });
+  await listen();
+  // Windows can allocate an ephemeral port that browsers refuse to navigate to.
+  const browserBlocked = new Set([2049,3659,4045,5060,5061,6000,6566,6665,6666,6667,6668,6669,6697,10080]);
+  while (port === 0 && (server.address().port < 1024 || browserBlocked.has(server.address().port))) {
+    await new Promise(resolve => server.close(resolve));
+    await listen();
+  }
   return { server, url: `http://127.0.0.1:${server.address().port}${base}` };
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
