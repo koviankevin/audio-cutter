@@ -224,6 +224,9 @@ try {
   await assertCleared();
   assert.equal(await page.locator('#export-result').isVisible(), false);
   await page.locator('#export-button').click();
+  // Exercise replacement during an active export, after asynchronous storage
+  // preflight has finished; the initially hidden panel is not cancellation.
+  await page.locator('#export-progress').waitFor({ state: 'visible' });
   await page.locator('#file-input').setInputFiles(file);
   await page.waitForFunction(() => document.getElementById('export-progress').hidden);
   await assertCleared();
